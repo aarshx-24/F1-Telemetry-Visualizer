@@ -50,10 +50,10 @@ st.markdown(
 
 
 @st.cache_resource(show_spinner=False)
-def load_session(request: SessionRequest) -> Any:
+def load_session(request: SessionRequest, telemetry: bool) -> Any:
     settings = build_settings(ROOT)
     loader = FastF1SessionLoader(settings=settings)
-    return loader.load_session(request, telemetry=True)
+    return loader.load_session(request, telemetry=telemetry)
 
 
 @st.cache_data(show_spinner=False)
@@ -72,15 +72,16 @@ def main() -> None:
     request, frequency_hz = render_request_controls(grand_prix_options, selected_year)
     if st.sidebar.button("Clear session cache"):
         load_session.clear()
+        load_grand_prix_options.clear()
         st.rerun()
 
-    session = _safe_load_session(request)
-    if session is None:
+    timing_session = _safe_load_session(request, telemetry=False)
+    if timing_session is None:
         return
 
     extractor = TelemetryExtractor()
     try:
-        drivers = extractor.available_drivers(session)
+        drivers = extractor.available_drivers(timing_session)
     except Exception as exc:
         st.error("The session was returned by FastF1, but lap data is not available yet.")
         st.info("Click 'Clear session cache' in the sidebar, then reload the session.")
@@ -91,6 +92,17 @@ def main() -> None:
     selected_drivers = controls.selected_drivers or drivers[:2]
     if len(selected_drivers) < 2:
         st.info("Select at least two drivers.")
+        return
+
+    st.info("Drivers loaded. Telemetry charts will appear after the selected lap data finishes loading.")
+
+    session = _safe_load_session(request, telemetry=True)
+    if session is None:
+        st.warning(
+            "Driver selection is available, but full telemetry could not be loaded yet. "
+            "Try Clear session cache, lower the telemetry frequency, or try another session."
+        )
+        st.dataframe(extractor.lap_table(timing_session), use_container_width=True, hide_index=True)
         return
 
     plotter = TelemetryPlotFactory()
@@ -129,10 +141,11 @@ def main() -> None:
         _render_data_tab(lap_table, comparison.sector_table)
 
 
-def _safe_load_session(request: SessionRequest) -> Any | None:
-    with st.spinner(f"Loading {request.label}"):
+def _safe_load_session(request: SessionRequest, *, telemetry: bool) -> Any | None:
+    load_type = "telemetry" if telemetry else "timing"
+    with st.spinner(f"Loading {load_type} data for {request.label}"):
         try:
-            return load_session(request)
+            return load_session(request, telemetry)
         except FastF1DataLoadError as exc:
             st.error(str(exc))
             st.info("Use the sidebar button 'Clear session cache', then try again.")
