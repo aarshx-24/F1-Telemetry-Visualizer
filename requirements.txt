@@ -1,0 +1,16 @@
+# Core telemetry stack
+fastf1>=3.8.1,<4.0
+pandas>=2.2,<3.0
+numpy>=1.26,<3.0
+matplotlib>=3.8,<4.0
+plotly>=5.20,<7.0
+
+# CLI and developer ergonomics
+rich>=13.7,<15.0
+typer>=0.12,<1.0
+
+# Analytics, ML, and dashboard
+scipy>=1.12,<2.0
+scikit-learn>=1.4,<2.0
+streamlit>=1.35,<2.0
+dash>=2.16,<4.0
