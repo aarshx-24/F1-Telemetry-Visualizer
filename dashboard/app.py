@@ -29,6 +29,12 @@ from telemetry.processing import TelemetryExtractor
 from telemetry.visualization import TelemetryPlotFactory
 
 
+FALLBACK_DRIVER_OPTIONS = [
+    "VER", "PER", "LEC", "SAI", "HAM", "RUS", "NOR", "PIA",
+    "ALO", "STR", "GAS", "OCO", "ALB", "SAR", "TSU", "RIC",
+    "LAW", "BOT", "ZHO", "HUL", "MAG",
+]
+
 st.set_page_config(
     page_title="F1 Telemetry Visualizer",
     page_icon=None,
@@ -75,18 +81,25 @@ def main() -> None:
         load_grand_prix_options.clear()
         st.rerun()
 
-    timing_session = _safe_load_session(request, telemetry=False)
-    if timing_session is None:
-        return
-
     extractor = TelemetryExtractor()
-    try:
-        drivers = extractor.available_drivers(timing_session)
-    except Exception as exc:
-        st.error("The session was returned by FastF1, but lap data is not available yet.")
-        st.info("Click 'Clear session cache' in the sidebar, then reload the session.")
-        st.caption(str(exc))
-        return
+    timing_session = _safe_load_session(request, telemetry=False, show_error=False)
+    timing_lap_table = pd.DataFrame()
+
+    if timing_session is None:
+        drivers = FALLBACK_DRIVER_OPTIONS
+        st.warning(
+            "FastF1 timing data could not be loaded yet, so fallback driver options are shown. "
+            "You can still choose drivers and retry telemetry loading."
+        )
+    else:
+        try:
+            drivers = extractor.available_drivers(timing_session)
+            timing_lap_table = extractor.lap_table(timing_session)
+        except Exception as exc:
+            drivers = FALLBACK_DRIVER_OPTIONS
+            st.warning("Driver metadata could not be read from FastF1, so fallback driver options are shown.")
+            st.caption(str(exc))
+
     controls = render_driver_controls(request, frequency_hz, drivers)
 
     selected_drivers = controls.selected_drivers or drivers[:2]
@@ -102,7 +115,10 @@ def main() -> None:
             "Driver selection is available, but full telemetry could not be loaded yet. "
             "Try Clear session cache, lower the telemetry frequency, or try another session."
         )
-        st.dataframe(extractor.lap_table(timing_session), use_container_width=True, hide_index=True)
+        if not timing_lap_table.empty:
+            st.dataframe(timing_lap_table, use_container_width=True, hide_index=True)
+        else:
+            st.info("No lap table is available yet because FastF1 timing data also failed to load.")
         return
 
     plotter = TelemetryPlotFactory()
@@ -141,17 +157,24 @@ def main() -> None:
         _render_data_tab(lap_table, comparison.sector_table)
 
 
-def _safe_load_session(request: SessionRequest, *, telemetry: bool) -> Any | None:
+def _safe_load_session(
+    request: SessionRequest,
+    *,
+    telemetry: bool,
+    show_error: bool = True,
+) -> Any | None:
     load_type = "telemetry" if telemetry else "timing"
     with st.spinner(f"Loading {load_type} data for {request.label}"):
         try:
             return load_session(request, telemetry)
         except FastF1DataLoadError as exc:
-            st.error(str(exc))
-            st.info("Use the sidebar button 'Clear session cache', then try again.")
+            if show_error:
+                st.error(str(exc))
+                st.info("Use the sidebar button 'Clear session cache', then try again.")
             return None
         except Exception as exc:
-            st.error(f"Session load failed: {exc}")
+            if show_error:
+                st.error(f"Session load failed: {exc}")
             return None
 
 
