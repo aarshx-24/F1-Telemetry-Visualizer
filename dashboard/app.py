@@ -25,6 +25,7 @@ from telemetry.analytics import (
 from telemetry.comparison import DriverComparisonService
 from telemetry.domain import SessionRequest
 from telemetry.ingestion import FastF1DataLoadError, FastF1SessionLoader
+from telemetry.ingestion.demo_data import DemoTelemetryFactory
 from telemetry.processing import TelemetryExtractor
 from telemetry.visualization import TelemetryPlotFactory
 
@@ -132,19 +133,22 @@ def main() -> None:
             )
         return
 
+    plotter = TelemetryPlotFactory()
     session = _safe_load_session(request, telemetry=True)
     if session is None:
         st.warning(
-            "Driver selection is available, but full telemetry could not be loaded yet. "
-            "Try Clear session cache, lower the telemetry frequency, or try another session."
+            "Live FastF1 telemetry is unavailable right now. Showing built-in demo telemetry "
+            "so the dashboard remains usable online."
         )
-        if not timing_lap_table.empty:
-            st.dataframe(timing_lap_table, use_container_width=True, hide_index=True)
-        else:
-            st.info("No lap table is available yet because FastF1 timing data also failed to load.")
+        demo_factory = DemoTelemetryFactory()
+        comparison = demo_factory.build_comparison(controls.request, selected_drivers)
+        demo_session = demo_factory.build_session(selected_drivers)
+        laps = list(comparison.laps)
+        lap_table = demo_session.laps
+        render_lap_metrics(laps)
+        _render_analysis_tabs(demo_session, extractor, laps, lap_table, plotter, comparison)
         return
 
-    plotter = TelemetryPlotFactory()
     comparison_service = DriverComparisonService(extractor=extractor)
 
     try:
@@ -162,6 +166,17 @@ def main() -> None:
     lap_table = extractor.lap_table(session)
     render_lap_metrics(laps)
 
+    _render_analysis_tabs(session, extractor, laps, lap_table, plotter, comparison)
+
+
+def _render_analysis_tabs(
+    session: Any,
+    extractor: TelemetryExtractor,
+    laps: list[Any],
+    lap_table: pd.DataFrame,
+    plotter: TelemetryPlotFactory,
+    comparison: Any,
+) -> None:
     tabs = st.tabs(["Compare", "Track", "Analytics", "ML", "Data"])
 
     with tabs[0]:
@@ -178,7 +193,6 @@ def main() -> None:
 
     with tabs[4]:
         _render_data_tab(lap_table, comparison.sector_table)
-
 
 def _safe_load_session(
     request: SessionRequest,
