@@ -24,7 +24,11 @@ from telemetry.analytics import (
 )
 from telemetry.comparison import DriverComparisonService
 from telemetry.domain import SessionRequest
-from telemetry.ingestion import FastF1DataLoadError, FastF1SessionLoader
+from telemetry.ingestion import (
+    FastF1DataLoadError,
+    FastF1SessionLoader,
+    ProcessedTelemetryStore,
+)
 from telemetry.ingestion.demo_data import DemoTelemetryFactory
 from telemetry.processing import TelemetryExtractor
 from telemetry.visualization import TelemetryPlotFactory
@@ -70,6 +74,23 @@ def load_grand_prix_options(year: int) -> list[str]:
     return loader.list_grand_prix(year)
 
 
+@st.cache_data(show_spinner=False)
+def load_processed_drivers(request: SessionRequest) -> list[str]:
+    settings = build_settings(ROOT)
+    store = ProcessedTelemetryStore(settings.processed_data_dir / "prebuilt")
+    return store.available_drivers(request) if store.contains(request) else []
+
+
+@st.cache_data(show_spinner=False)
+def load_processed_data(
+    request: SessionRequest,
+    drivers: tuple[str, ...],
+) -> tuple[Any, Any]:
+    settings = build_settings(ROOT)
+    store = ProcessedTelemetryStore(settings.processed_data_dir / "prebuilt")
+    return store.load_session(request), store.load_comparison(request, list(drivers))
+
+
 def main() -> None:
     st.title("F1 Telemetry Visualizer")
 
@@ -80,27 +101,24 @@ def main() -> None:
     if st.sidebar.button("Clear session cache"):
         load_session.clear()
         load_grand_prix_options.clear()
-        st.session_state["load_telemetry_charts"] = False
+        load_processed_drivers.clear()
+        load_processed_data.clear()
         st.rerun()
 
     extractor = TelemetryExtractor()
-    timing_session = _safe_load_session(request, telemetry=False, show_error=False)
-    timing_lap_table = pd.DataFrame()
+    processed_drivers = load_processed_drivers(request)
 
-    if timing_session is None:
-        drivers = FALLBACK_DRIVER_OPTIONS
-        st.warning(
-            "FastF1 timing data could not be loaded yet, so fallback driver options are shown. "
-            "You can still choose drivers and retry telemetry loading."
-        )
+    if processed_drivers:
+        drivers = processed_drivers
     else:
-        try:
-            drivers = extractor.available_drivers(timing_session)
-            timing_lap_table = extractor.lap_table(timing_session)
-        except Exception as exc:
+        timing_session = _safe_load_session(request, telemetry=False, show_error=False)
+        if timing_session is None:
             drivers = FALLBACK_DRIVER_OPTIONS
-            st.warning("Driver metadata could not be read from FastF1, so fallback driver options are shown.")
-            st.caption(str(exc))
+        else:
+            try:
+                drivers = extractor.available_drivers(timing_session)
+            except Exception:
+                drivers = FALLBACK_DRIVER_OPTIONS
 
     controls = render_driver_controls(request, frequency_hz, drivers)
 
@@ -109,20 +127,30 @@ def main() -> None:
         st.info("Select at least two drivers.")
         return
 
-    st.info("Drivers loaded. Loading telemetry charts automatically with FastF1.")
-
     plotter = TelemetryPlotFactory()
-    session = _safe_load_session(request, telemetry=True)
+    if processed_drivers and set(selected_drivers).issubset(processed_drivers):
+        with st.spinner(f"Loading prepared telemetry for {request.label}"):
+            session, comparison = load_processed_data(request, tuple(selected_drivers))
+        laps = list(comparison.laps)
+        lap_table = session.laps
+        st.caption("Data source: prepared FastF1 telemetry")
+        render_lap_metrics(laps)
+        _render_analysis_tabs(session, extractor, laps, lap_table, plotter, comparison)
+        return
+
+    st.info("Loading live FastF1 telemetry. Prepared sessions open instantly.")
+    session = _safe_load_session(request, telemetry=True, show_error=False)
     if session is None:
         st.warning(
-            "Live FastF1 telemetry is unavailable right now. Showing built-in demo telemetry "
-            "so the dashboard remains usable online."
+            "Live FastF1 is temporarily unavailable for this session. "
+            "Showing clearly labelled demonstration telemetry instead."
         )
         demo_factory = DemoTelemetryFactory()
         comparison = demo_factory.build_comparison(controls.request, selected_drivers)
         demo_session = demo_factory.build_session(selected_drivers)
         laps = list(comparison.laps)
         lap_table = demo_session.laps
+        st.caption("Data source: demonstration telemetry (not official FastF1 data)")
         render_lap_metrics(laps)
         _render_analysis_tabs(demo_session, extractor, laps, lap_table, plotter, comparison)
         return
@@ -142,6 +170,7 @@ def main() -> None:
 
     laps = list(comparison.laps)
     lap_table = extractor.lap_table(session)
+    st.caption("Data source: live FastF1 telemetry")
     render_lap_metrics(laps)
 
     _render_analysis_tabs(session, extractor, laps, lap_table, plotter, comparison)
@@ -202,32 +231,32 @@ def _render_compare_tab(
     with left:
         st.plotly_chart(
             plotter.telemetry_overlay(laps, "Speed", title="Speed comparison"),
-            use_container_width=True,
+            width="stretch",
         )
         st.plotly_chart(
             plotter.telemetry_overlay(laps, "Throttle", title="Throttle comparison"),
-            use_container_width=True,
+            width="stretch",
         )
     with right:
-        st.plotly_chart(plotter.delta_trace(comparison.aligned), use_container_width=True)
+        st.plotly_chart(plotter.delta_trace(comparison.aligned), width="stretch")
         st.plotly_chart(
             plotter.telemetry_overlay(laps, "Brake", title="Brake comparison"),
-            use_container_width=True,
+            width="stretch",
         )
 
     gear, rpm = st.columns(2)
     with gear:
         st.plotly_chart(
             plotter.telemetry_overlay(laps, "nGear", title="Gear comparison"),
-            use_container_width=True,
+            width="stretch",
         )
     with rpm:
         st.plotly_chart(
             plotter.telemetry_overlay(laps, "RPM", title="RPM comparison"),
-            use_container_width=True,
+            width="stretch",
         )
 
-    st.plotly_chart(plotter.sector_bars(comparison.sector_table), use_container_width=True)
+    st.plotly_chart(plotter.sector_bars(comparison.sector_table), width="stretch")
     if comparison.insights:
         st.subheader("Insights")
         for insight in comparison.insights:
@@ -237,9 +266,9 @@ def _render_compare_tab(
 def _render_track_tab(plotter: TelemetryPlotFactory, laps: list[Any]) -> None:
     heatmap, overlay = st.columns(2)
     with heatmap:
-        st.plotly_chart(plotter.track_speed_map(laps[0]), use_container_width=True)
+        st.plotly_chart(plotter.track_speed_map(laps[0]), width="stretch")
     with overlay:
-        st.plotly_chart(plotter.track_overlay(laps), use_container_width=True)
+        st.plotly_chart(plotter.track_overlay(laps), width="stretch")
 
 
 def _render_analytics_tab(
@@ -255,18 +284,18 @@ def _render_analytics_tab(
     first, second = st.columns(2)
     with first:
         st.subheader("Consistency")
-        st.dataframe(consistency, use_container_width=True, hide_index=True)
+        st.dataframe(consistency, width="stretch", hide_index=True)
     with second:
         st.subheader("Tyre Degradation")
-        st.dataframe(tire_degradation, use_container_width=True, hide_index=True)
+        st.dataframe(tire_degradation, width="stretch", hide_index=True)
 
-    st.plotly_chart(plotter.lap_time_scatter(lap_table), use_container_width=True)
-    st.plotly_chart(plotter.tire_degradation(tire_degradation), use_container_width=True)
+    st.plotly_chart(plotter.lap_time_scatter(lap_table), width="stretch")
+    st.plotly_chart(plotter.tire_degradation(tire_degradation), width="stretch")
 
     braking_rows = [BrakingAnalyzer().detect_braking_zones(lap) for lap in laps]
     braking = pd.concat(braking_rows, ignore_index=True) if braking_rows else pd.DataFrame()
     st.subheader("Braking Zones")
-    st.dataframe(braking, use_container_width=True, hide_index=True)
+    st.dataframe(braking, width="stretch", hide_index=True)
 
     circuit_info = session.get_circuit_info()
     corner_rows = [
@@ -275,27 +304,27 @@ def _render_analytics_tab(
     ]
     corner_table = pd.concat(corner_rows, ignore_index=True) if corner_rows else pd.DataFrame()
     st.subheader("Corner Performance")
-    st.dataframe(corner_table, use_container_width=True, hide_index=True)
+    st.dataframe(corner_table, width="stretch", hide_index=True)
 
 
 def _render_ml_tab(lap_table: pd.DataFrame, plotter: TelemetryPlotFactory) -> None:
     clusters = LapClusterAnalyzer().cluster_laps(lap_table)
     anomalies = TelemetryAnomalyDetector().detect(lap_table)
 
-    st.plotly_chart(plotter.cluster_scatter(clusters), use_container_width=True)
+    st.plotly_chart(plotter.cluster_scatter(clusters), width="stretch")
 
     left, right = st.columns(2)
     with left:
         st.subheader("Clustered Laps")
-        st.dataframe(clusters, use_container_width=True, hide_index=True)
+        st.dataframe(clusters, width="stretch", hide_index=True)
     with right:
         st.subheader("Anomaly Detection")
-        st.dataframe(anomalies, use_container_width=True, hide_index=True)
+        st.dataframe(anomalies, width="stretch", hide_index=True)
 
 
 def _render_data_tab(lap_table: pd.DataFrame, sector_table: pd.DataFrame) -> None:
     st.subheader("Lap Data")
-    st.dataframe(lap_table, use_container_width=True, hide_index=True)
+    st.dataframe(lap_table, width="stretch", hide_index=True)
     st.download_button(
         label="Download lap data CSV",
         data=lap_table.to_csv(index=False),
@@ -304,7 +333,7 @@ def _render_data_tab(lap_table: pd.DataFrame, sector_table: pd.DataFrame) -> Non
     )
 
     st.subheader("Sector Data")
-    st.dataframe(sector_table, use_container_width=True, hide_index=True)
+    st.dataframe(sector_table, width="stretch", hide_index=True)
     st.download_button(
         label="Download sector data CSV",
         data=sector_table.to_csv(index=False),

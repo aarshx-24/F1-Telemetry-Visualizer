@@ -8,6 +8,17 @@ https://f1-telemetry-visualizer.streamlit.app/
 
 This project combines FastF1 data ingestion, reusable telemetry processing, motorsport analytics, interactive Plotly visualizations, and a Streamlit dashboard.
 
+The deployed dashboard uses a production-style data path:
+
+```text
+FastF1 local ingestion -> processed telemetry files -> Streamlit dashboard
+```
+
+Prepared sessions do not depend on a live FastF1 download when a visitor opens the
+site. Live FastF1 remains available for sessions that have not been prepared, and a
+clearly labelled demonstration dataset keeps the interface usable if the upstream
+timing service is unavailable.
+
 ## What It Does
 
 - Loads Formula 1 sessions using FastF1
@@ -41,15 +52,8 @@ Drivers: VER and LEC
 Telemetry frequency: 10
 ```
 
-The first load can take time because FastF1 may need to download session timing, car telemetry, and position data into the Streamlit Cloud cache.
-
-If the app shows a FastF1 loading warning, click:
-
-```text
-Clear session cache
-```
-
-Then refresh or try another session.
+The included 2024 Italian Grand Prix qualifying comparison is prepared in advance,
+so it opens without downloading FastF1 data at page-load time.
 
 ## Run Locally
 
@@ -88,6 +92,15 @@ Export lap timing data:
 ```powershell
 .\.venv\Scripts\python.exe main.py export-laps --year 2024 --grand-prix Monza --session Q
 ```
+
+Prepare a session for reliable online use:
+
+```powershell
+.\.venv\Scripts\python.exe main.py prepare-session --year 2024 --grand-prix "Italian Grand Prix" --session Q --drivers VER LEC
+```
+
+Commit the generated folder under `data/processed/prebuilt/` and push it to GitHub.
+The online dashboard will automatically use it before attempting a live download.
 
 Launch dashboard through the CLI:
 
@@ -130,7 +143,7 @@ project_root/
 
 The codebase is split into reusable layers:
 
-- `telemetry.ingestion`: FastF1 session loading and cache setup
+- `telemetry.ingestion`: FastF1 loading, cache setup, and processed telemetry storage
 - `telemetry.processing`: telemetry cleaning, lap extraction, and distance alignment
 - `telemetry.comparison`: driver-vs-driver comparison workflows
 - `telemetry.analytics`: braking, consistency, tyre, corner, clustering, and anomaly analysis
@@ -162,7 +175,7 @@ Run tests:
 Expected result:
 
 ```text
-6 passed
+7 passed
 ```
 
 ## Deployment
@@ -189,16 +202,21 @@ To update the deployed site:
 
 ## Notes
 
-FastF1 depends on external Formula 1 timing data sources. If those services are slow or temporarily blocked, the app may show a loading warning. The dashboard includes fallback driver options and cache controls so the UI remains usable while data loading is retried.
+FastF1 depends on external Formula 1 timing data sources. Prepared datasets isolate
+the public dashboard from temporary upstream outages. The interface identifies its
+active data source as prepared FastF1, live FastF1, or demonstration telemetry.
 
 Generated local files are intentionally ignored by Git:
 
 ```text
 .venv/
 data/cache/
-data/processed/
+data/processed/*
 logs/
 reports/
 __pycache__/
 .pytest_cache/
 ```
+
+`data/processed/prebuilt/` is intentionally committed because it contains the small,
+analysis-ready datasets used by the deployed dashboard.

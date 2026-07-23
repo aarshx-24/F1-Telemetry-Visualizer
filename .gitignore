@@ -2,6 +2,7 @@
 __pycache__/
 *.py[cod]
 .pytest_cache/
+.tmp/
 .mypy_cache/
 .ruff_cache/
 
@@ -11,6 +12,8 @@ data/processed/*
 data/cache/*
 !data/raw/.gitkeep
 !data/processed/.gitkeep
+!data/processed/prebuilt/
+!data/processed/prebuilt/**
 !data/cache/.gitkeep
 
 # Generated reports and notebook checkpoints

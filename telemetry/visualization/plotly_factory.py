@@ -8,6 +8,13 @@ from telemetry.domain import LapTelemetry
 
 
 DEFAULT_TEMPLATE = "plotly_dark"
+DRIVER_COLORS = (
+    "#5b8cff",
+    "#ff4b3e",
+    "#22c55e",
+    "#f5c542",
+)
+DRIVER_DASHES = ("solid", "dash", "dot", "dashdot")
 
 
 class TelemetryPlotFactory:
@@ -21,7 +28,7 @@ class TelemetryPlotFactory:
         title: str | None = None,
     ) -> go.Figure:
         fig = go.Figure()
-        for lap in laps:
+        for index, lap in enumerate(laps):
             if channel not in lap.telemetry or "Distance" not in lap.telemetry:
                 continue
             fig.add_trace(
@@ -30,6 +37,12 @@ class TelemetryPlotFactory:
                     y=lap.telemetry[channel],
                     mode="lines",
                     name=lap.label,
+                    line={
+                        "color": DRIVER_COLORS[index % len(DRIVER_COLORS)],
+                        "dash": DRIVER_DASHES[index % len(DRIVER_DASHES)],
+                        "width": 2.5,
+                    },
+                    opacity=0.95,
                     hovertemplate="Distance %{x:.0f} m<br>%{y:.2f}<extra></extra>",
                 )
             )
@@ -83,7 +96,7 @@ class TelemetryPlotFactory:
 
     def track_overlay(self, laps: list[LapTelemetry]) -> go.Figure:
         fig = go.Figure()
-        for lap in laps:
+        for index, lap in enumerate(laps):
             telemetry = lap.telemetry
             if not {"X", "Y"}.issubset(telemetry.columns):
                 continue
@@ -93,6 +106,11 @@ class TelemetryPlotFactory:
                     y=telemetry["Y"],
                     mode="lines",
                     name=lap.label,
+                    line={
+                        "color": DRIVER_COLORS[index % len(DRIVER_COLORS)],
+                        "dash": DRIVER_DASHES[index % len(DRIVER_DASHES)],
+                        "width": 3,
+                    },
                     hovertemplate="X %{x:.0f}<br>Y %{y:.0f}<extra></extra>",
                 )
             )

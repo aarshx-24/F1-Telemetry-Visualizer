@@ -30,20 +30,28 @@ class DistanceTelemetryAligner:
             return pd.DataFrame()
 
         grid = np.linspace(start, end, samples)
-        aligned = pd.DataFrame({"Distance": grid})
+        columns: dict[str, np.ndarray] = {"Distance": grid}
 
         for channel in channels:
             if channel in ref.columns:
-                aligned[f"{reference.driver}_{channel}"] = self._interpolate(ref, channel, grid)
+                columns[f"{reference.driver}_{channel}"] = self._interpolate(
+                    ref,
+                    channel,
+                    grid,
+                )
             if channel in cmp.columns:
-                aligned[f"{comparison.driver}_{channel}"] = self._interpolate(cmp, channel, grid)
+                columns[f"{comparison.driver}_{channel}"] = self._interpolate(
+                    cmp,
+                    channel,
+                    grid,
+                )
 
         ref_time = f"{reference.driver}_TimeSeconds"
         cmp_time = f"{comparison.driver}_TimeSeconds"
-        if ref_time in aligned.columns and cmp_time in aligned.columns:
-            aligned["DeltaSeconds"] = aligned[cmp_time] - aligned[ref_time]
+        if ref_time in columns and cmp_time in columns:
+            columns["DeltaSeconds"] = columns[cmp_time] - columns[ref_time]
 
-        return aligned
+        return pd.DataFrame(columns)
 
     def align_many(
         self,
@@ -61,17 +69,17 @@ class DistanceTelemetryAligner:
             return pd.DataFrame()
 
         grid = np.linspace(start, end, samples)
-        aligned = pd.DataFrame({"Distance": grid})
+        columns: dict[str, np.ndarray] = {"Distance": grid}
         for lap in laps:
             for channel in channels:
                 if channel in lap.telemetry.columns:
-                    aligned[f"{lap.driver}_{channel}"] = self._interpolate(
+                    columns[f"{lap.driver}_{channel}"] = self._interpolate(
                         lap.telemetry,
                         channel,
                         grid,
                     )
 
-        return aligned
+        return pd.DataFrame(columns)
 
     @staticmethod
     def _interpolate(frame: pd.DataFrame, channel: str, grid: np.ndarray) -> np.ndarray:

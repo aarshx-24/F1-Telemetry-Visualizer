@@ -5,12 +5,18 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pandas as pd
 import plotly.io as pio
 
 from config.settings import build_settings
 from telemetry.comparison import DriverComparisonService
 from telemetry.domain import ExportedReport, SessionRequest
-from telemetry.ingestion import FastF1NotInstalledError, FastF1SessionLoader
+from telemetry.ingestion import (
+    FastF1DataLoadError,
+    FastF1NotInstalledError,
+    FastF1SessionLoader,
+    ProcessedTelemetryStore,
+)
 from telemetry.processing import TelemetryExtractor
 from telemetry.visualization import TelemetryPlotFactory
 
@@ -20,7 +26,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "command",
         nargs="?",
-        choices=["summary", "compare", "export-laps", "dashboard"],
+        choices=["summary", "compare", "export-laps", "prepare-session", "dashboard"],
         default="summary",
     )
     parser.add_argument("--year", type=int, default=2024)
@@ -60,13 +66,24 @@ def main() -> int:
             path = export_lap_table(loader, request, settings.processed_data_dir)
             print(f"Lap table written: {path}")
             return 0
+        if args.command == "prepare-session":
+            path = prepare_session_dataset(
+                loader,
+                request,
+                settings.processed_data_dir / "prebuilt",
+                drivers=args.drivers,
+                frequency=args.frequency,
+            )
+            print(f"Prepared telemetry written: {path}")
+            return 0
 
         summary = loader.load_session_summary(request)
         print(summary.to_console_text())
         return 0
-    except FastF1NotInstalledError as exc:
+    except (FastF1NotInstalledError, FastF1DataLoadError) as exc:
         print(exc)
-        print("Install dependencies with: python -m pip install -r requirements.txt")
+        if isinstance(exc, FastF1NotInstalledError):
+            print("Install dependencies with: python -m pip install -r requirements.txt")
         return 1
 
 
@@ -131,6 +148,36 @@ def export_lap_table(
     path = output_dir / f"laps_{request.year}_{_slug(request.grand_prix)}_{request.session_type}.csv"
     table.to_csv(path, index=False)
     return path
+
+
+def prepare_session_dataset(
+    loader: FastF1SessionLoader,
+    request: SessionRequest,
+    output_dir: Path,
+    *,
+    drivers: list[str],
+    frequency: int,
+) -> Path:
+    """Download once locally and store only analysis-ready dashboard data."""
+
+    session = loader.load_session(request, telemetry=True)
+    extractor = TelemetryExtractor()
+    comparison = DriverComparisonService(extractor=extractor).compare_fastest_laps(
+        session,
+        request,
+        drivers,
+        frequency=frequency,
+    )
+    lap_table = extractor.lap_table(session)
+    circuit_info = session.get_circuit_info()
+    corners = pd.DataFrame(getattr(circuit_info, "corners", pd.DataFrame())).copy()
+    store = ProcessedTelemetryStore(output_dir)
+    return store.save(
+        comparison,
+        lap_table,
+        corners,
+        frequency_hz=frequency,
+    )
 
 
 def _report_path(
