@@ -1,28 +1,59 @@
 # F1 Telemetry Visualizer
 
-Professional Formula 1 telemetry analysis platform built completely in Python.
+Professional Formula 1 telemetry analysis and visualization platform built in Python.
 
-This is now a runnable end-to-end project with:
+Live app:
 
-- FastF1 session loading and cache management
-- lap and telemetry extraction
-- distance-based telemetry alignment
-- driver fastest-lap comparison
-- speed, throttle, brake, gear, RPM, DRS-ready traces
-- delta timing
-- racing-line overlays and speed heatmaps
-- sector comparison
-- braking-zone analysis
-- tyre degradation estimation
-- consistency metrics
-- lap clustering and anomaly detection
-- Streamlit dashboard
-- HTML report export
-- CSV data export
+https://f1-telemetry-visualizer.streamlit.app/
 
-## Open the Dashboard
+This project combines FastF1 data ingestion, reusable telemetry processing, motorsport analytics, interactive Plotly visualizations, and a Streamlit dashboard.
 
-From this project folder:
+## What It Does
+
+- Loads Formula 1 sessions using FastF1
+- Caches race/session data for faster repeat analysis
+- Extracts lap and telemetry data
+- Compares fastest laps between drivers
+- Aligns telemetry by distance for fair driver comparison
+- Visualizes speed, throttle, brake, RPM, gear, and DRS traces
+- Shows delta-time comparison
+- Plots racing-line overlays and speed heatmaps
+- Compares sector performance
+- Estimates braking-zone behavior
+- Computes consistency and pace metrics
+- Estimates tyre degradation trends
+- Performs lap clustering and anomaly detection
+- Exports CSV data and HTML reports
+
+## Use The Online App
+
+Open:
+
+https://f1-telemetry-visualizer.streamlit.app/
+
+Recommended first test:
+
+```text
+Year: 2024
+Grand Prix: Italian Grand Prix
+Session: Q
+Drivers: VER and LEC
+Telemetry frequency: 10
+```
+
+The first load can take time because FastF1 may need to download session timing, car telemetry, and position data into the Streamlit Cloud cache.
+
+If the app shows a FastF1 loading warning, click:
+
+```text
+Clear session cache
+```
+
+Then refresh or try another session.
+
+## Run Locally
+
+From the project folder:
 
 ```powershell
 .\run_dashboard.bat
@@ -30,9 +61,9 @@ From this project folder:
 
 Then open:
 
-[http://localhost:8501](http://localhost:8501)
+http://localhost:8501
 
-You can also run it manually:
+Manual Streamlit command:
 
 ```powershell
 .\.venv\Scripts\python.exe -m streamlit run dashboard\app.py --server.port 8501
@@ -91,26 +122,25 @@ project_root/
 |-- models/
 |-- utils/
 |-- notebooks/
-|-- reports/
 |-- docs/
 `-- tests/
 ```
 
 ## Architecture
 
-The codebase separates responsibilities:
+The codebase is split into reusable layers:
 
-- `telemetry.ingestion` owns FastF1 loading and cache setup.
-- `telemetry.processing` cleans telemetry, extracts laps, and aligns signals by distance.
-- `telemetry.comparison` coordinates driver-vs-driver analysis.
-- `telemetry.analytics` computes braking, consistency, degradation, corner, clustering, and anomaly insights.
-- `telemetry.visualization` creates reusable Plotly figures.
-- `dashboard` contains the Streamlit UI.
-- `main.py` exposes CLI workflows.
+- `telemetry.ingestion`: FastF1 session loading and cache setup
+- `telemetry.processing`: telemetry cleaning, lap extraction, and distance alignment
+- `telemetry.comparison`: driver-vs-driver comparison workflows
+- `telemetry.analytics`: braking, consistency, tyre, corner, clustering, and anomaly analysis
+- `telemetry.visualization`: reusable Plotly figure builders
+- `dashboard`: Streamlit user interface
+- `main.py`: command-line workflows
 
-## Setup
+## Setup For Development
 
-If `.venv` is missing, create it and install the full stack:
+Create a virtual environment and install dependencies:
 
 ```powershell
 py -3.12 -m venv .venv
@@ -119,11 +149,11 @@ python -m pip install --upgrade pip
 python -m pip install -r requirements.txt -r requirements-dev.txt
 ```
 
-If your machine does not expose `py`, use the full path to your Python executable.
+If `py` is not available, use your installed Python executable directly.
 
 ## Verification
 
-Run:
+Run tests:
 
 ```powershell
 .\.venv\Scripts\python.exe -m pytest
@@ -135,15 +165,40 @@ Expected result:
 6 passed
 ```
 
-## Generated Artifacts
+## Deployment
 
-Example outputs already generated:
+This app is deployed on Streamlit Community Cloud.
 
-- `reports/comparison_2024_monza_Q_VER_LEC.html`
-- `data/processed/laps_2024_monza_Q.csv`
-
-FastF1 cache is stored in:
+Deployment settings:
 
 ```text
+Repository: GitHub project repository
+Branch: main
+Main file path: dashboard/app.py
+Python version: 3.12
+Dependencies: requirements.txt
+```
+
+To update the deployed site:
+
+1. Edit code locally.
+2. Commit changes in VS Code or Git.
+3. Push to GitHub.
+4. Streamlit Cloud redeploys automatically.
+5. If needed, click Reboot app in Streamlit Cloud.
+
+## Notes
+
+FastF1 depends on external Formula 1 timing data sources. If those services are slow or temporarily blocked, the app may show a loading warning. The dashboard includes fallback driver options and cache controls so the UI remains usable while data loading is retried.
+
+Generated local files are intentionally ignored by Git:
+
+```text
+.venv/
 data/cache/
+data/processed/
+logs/
+reports/
+__pycache__/
+.pytest_cache/
 ```

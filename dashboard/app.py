@@ -79,6 +79,7 @@ def main() -> None:
     if st.sidebar.button("Clear session cache"):
         load_session.clear()
         load_grand_prix_options.clear()
+        st.session_state["load_telemetry_charts"] = False
         st.rerun()
 
     extractor = TelemetryExtractor()
@@ -107,7 +108,29 @@ def main() -> None:
         st.info("Select at least two drivers.")
         return
 
-    st.info("Drivers loaded. Telemetry charts will appear after the selected lap data finishes loading.")
+    request_key = (
+        f"{request.year}-{request.grand_prix}-{request.session_type}-"
+        f"{'-'.join(selected_drivers)}-{controls.frequency_hz}"
+    )
+    if st.session_state.get("telemetry_request_key") != request_key:
+        st.session_state["telemetry_request_key"] = request_key
+        st.session_state["load_telemetry_charts"] = False
+
+    if st.sidebar.button("Load telemetry charts", type="primary"):
+        st.session_state["load_telemetry_charts"] = True
+
+    st.info("Drivers loaded. Click 'Load telemetry charts' to fetch full FastF1 telemetry.")
+
+    if not st.session_state.get("load_telemetry_charts", False):
+        if not timing_lap_table.empty:
+            st.subheader("Lap Data Preview")
+            st.dataframe(timing_lap_table, use_container_width=True, hide_index=True)
+        else:
+            st.info(
+                "Timing data is not available yet. Use Clear session cache, then click "
+                "Load telemetry charts to retry."
+            )
+        return
 
     session = _safe_load_session(request, telemetry=True)
     if session is None:
