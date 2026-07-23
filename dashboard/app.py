@@ -24,12 +24,12 @@ from telemetry.analytics import (
 )
 from telemetry.comparison import DriverComparisonService
 from telemetry.domain import SessionRequest
-from telemetry.ingestion import (
+from telemetry.ingestion.fastf1_session_loader import (
     FastF1DataLoadError,
     FastF1SessionLoader,
-    ProcessedTelemetryStore,
 )
 from telemetry.ingestion.demo_data import DemoTelemetryFactory
+from telemetry.ingestion.processed_store import ProcessedTelemetryStore
 from telemetry.processing import TelemetryExtractor
 from telemetry.visualization import TelemetryPlotFactory
 

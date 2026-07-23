@@ -11,12 +11,12 @@ import plotly.io as pio
 from config.settings import build_settings
 from telemetry.comparison import DriverComparisonService
 from telemetry.domain import ExportedReport, SessionRequest
-from telemetry.ingestion import (
+from telemetry.ingestion.fastf1_session_loader import (
     FastF1DataLoadError,
     FastF1NotInstalledError,
     FastF1SessionLoader,
-    ProcessedTelemetryStore,
 )
+from telemetry.ingestion.processed_store import ProcessedTelemetryStore
 from telemetry.processing import TelemetryExtractor
 from telemetry.visualization import TelemetryPlotFactory
 
