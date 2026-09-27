@@ -5,18 +5,12 @@ import subprocess
 import sys
 from pathlib import Path
 
-import pandas as pd
 import plotly.io as pio
 
 from config.settings import build_settings
 from telemetry.comparison import DriverComparisonService
 from telemetry.domain import ExportedReport, SessionRequest
-from telemetry.ingestion.fastf1_session_loader import (
-    FastF1DataLoadError,
-    FastF1NotInstalledError,
-    FastF1SessionLoader,
-)
-from telemetry.ingestion.processed_store import ProcessedTelemetryStore
+from telemetry.ingestion import FastF1NotInstalledError, FastF1SessionLoader
 from telemetry.processing import TelemetryExtractor
 from telemetry.visualization import TelemetryPlotFactory
 
@@ -26,14 +20,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "command",
         nargs="?",
-        choices=[
-            "summary",
-            "compare",
-            "export-laps",
-            "prepare-session",
-            "dashboard",
-            "evaluate-ml",
-        ],
+        choices=["summary", "compare", "export-laps", "dashboard"],
         default="summary",
     )
     parser.add_argument("--year", type=int, default=2024)
@@ -42,8 +29,6 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--drivers", nargs="+", default=["VER", "LEC"])
     parser.add_argument("--frequency", type=int, default=10)
     parser.add_argument("--port", type=int, default=8501)
-    parser.add_argument("--reference-csv", type=Path)
-    parser.add_argument("--evaluation-csv", type=Path)
     return parser.parse_args()
 
 
@@ -60,23 +45,6 @@ def main() -> int:
     loader = FastF1SessionLoader(settings=settings)
 
     try:
-        if args.command == "evaluate-ml":
-            from telemetry.analytics.evaluation import evaluate_held_out
-
-            if args.reference_csv is None or args.evaluation_csv is None:
-                raise ValueError(
-                    "Provide --reference-csv and --evaluation-csv from different sessions."
-                )
-            scores, metrics = evaluate_held_out(
-                pd.read_csv(args.reference_csv), pd.read_csv(args.evaluation_csv)
-            )
-            scores.to_csv(settings.reports_dir / "held_out_scores.csv", index=False)
-            metrics.to_csv(settings.reports_dir / "held_out_metrics.csv", index=False)
-            print(metrics.to_string(index=False))
-            print(
-                "Without independent labels these are score summaries, not accuracy estimates. Use comparable circuit/session cohorts."
-            )
-            return 0
         if args.command == "dashboard":
             return launch_dashboard(settings.project_root, args.port)
         if args.command == "compare":
@@ -92,26 +60,13 @@ def main() -> int:
             path = export_lap_table(loader, request, settings.processed_data_dir)
             print(f"Lap table written: {path}")
             return 0
-        if args.command == "prepare-session":
-            path = prepare_session_dataset(
-                loader,
-                request,
-                settings.processed_data_dir / "prebuilt",
-                drivers=args.drivers,
-                frequency=args.frequency,
-            )
-            print(f"Prepared telemetry written: {path}")
-            return 0
 
         summary = loader.load_session_summary(request)
         print(summary.to_console_text())
         return 0
-    except (FastF1NotInstalledError, FastF1DataLoadError, ValueError, OSError) as exc:
+    except FastF1NotInstalledError as exc:
         print(exc)
-        if isinstance(exc, FastF1NotInstalledError):
-            print(
-                "Install dependencies with: python -m pip install -r requirements.txt"
-            )
+        print("Install dependencies with: python -m pip install -r requirements.txt")
         return 1
 
 
@@ -147,15 +102,9 @@ def build_comparison_report(
     )
     plotter = TelemetryPlotFactory()
     figures = [
-        plotter.telemetry_overlay(
-            list(comparison.laps), "Speed", title="Speed comparison"
-        ),
-        plotter.telemetry_overlay(
-            list(comparison.laps), "Throttle", title="Throttle comparison"
-        ),
-        plotter.telemetry_overlay(
-            list(comparison.laps), "Brake", title="Brake comparison"
-        ),
+        plotter.telemetry_overlay(list(comparison.laps), "Speed", title="Speed comparison"),
+        plotter.telemetry_overlay(list(comparison.laps), "Throttle", title="Throttle comparison"),
+        plotter.telemetry_overlay(list(comparison.laps), "Brake", title="Brake comparison"),
         plotter.delta_trace(comparison.aligned),
         plotter.track_overlay(list(comparison.laps)),
         plotter.sector_bars(comparison.sector_table),
@@ -163,9 +112,7 @@ def build_comparison_report(
 
     report_path = _report_path(loader, request, drivers)
     sections = [
-        pio.to_html(
-            fig, full_html=False, include_plotlyjs="cdn" if index == 0 else False
-        )
+        pio.to_html(fig, full_html=False, include_plotlyjs="cdn" if index == 0 else False)
         for index, fig in enumerate(figures)
     ]
     html = _wrap_report_html(request, drivers, comparison.insights, sections)
@@ -181,42 +128,9 @@ def export_lap_table(
     session = loader.load_session(request, telemetry=False)
     table = TelemetryExtractor().lap_table(session)
     output_dir.mkdir(parents=True, exist_ok=True)
-    path = (
-        output_dir
-        / f"laps_{request.year}_{_slug(request.grand_prix)}_{request.session_type}.csv"
-    )
+    path = output_dir / f"laps_{request.year}_{_slug(request.grand_prix)}_{request.session_type}.csv"
     table.to_csv(path, index=False)
     return path
-
-
-def prepare_session_dataset(
-    loader: FastF1SessionLoader,
-    request: SessionRequest,
-    output_dir: Path,
-    *,
-    drivers: list[str],
-    frequency: int,
-) -> Path:
-    """Download once locally and store only analysis-ready dashboard data."""
-
-    session = loader.load_session(request, telemetry=True)
-    extractor = TelemetryExtractor()
-    comparison = DriverComparisonService(extractor=extractor).compare_fastest_laps(
-        session,
-        request,
-        drivers,
-        frequency=frequency,
-    )
-    lap_table = extractor.lap_table(session)
-    circuit_info = session.get_circuit_info()
-    corners = pd.DataFrame(getattr(circuit_info, "corners", pd.DataFrame())).copy()
-    store = ProcessedTelemetryStore(output_dir)
-    return store.save(
-        comparison,
-        lap_table,
-        corners,
-        frequency_hz=frequency,
-    )
 
 
 def _report_path(
@@ -264,9 +178,7 @@ def _wrap_report_html(
 
 
 def _slug(value: str) -> str:
-    return "".join(
-        character.lower() if character.isalnum() else "_" for character in value
-    ).strip("_")
+    return "".join(character.lower() if character.isalnum() else "_" for character in value).strip("_")
 
 
 if __name__ == "__main__":

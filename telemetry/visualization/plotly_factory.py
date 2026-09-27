@@ -8,13 +8,6 @@ from telemetry.domain import LapTelemetry
 
 
 DEFAULT_TEMPLATE = "plotly_dark"
-DRIVER_COLORS = (
-    "#5b8cff",
-    "#ff4b3e",
-    "#22c55e",
-    "#f5c542",
-)
-DRIVER_DASHES = ("solid", "dash", "dot", "dashdot")
 
 
 class TelemetryPlotFactory:
@@ -28,7 +21,7 @@ class TelemetryPlotFactory:
         title: str | None = None,
     ) -> go.Figure:
         fig = go.Figure()
-        for index, lap in enumerate(laps):
+        for lap in laps:
             if channel not in lap.telemetry or "Distance" not in lap.telemetry:
                 continue
             fig.add_trace(
@@ -37,15 +30,6 @@ class TelemetryPlotFactory:
                     y=lap.telemetry[channel],
                     mode="lines",
                     name=lap.label,
-                    line={
-                        "color": DRIVER_COLORS[index % len(DRIVER_COLORS)],
-                        "dash": DRIVER_DASHES[index % len(DRIVER_DASHES)],
-                        "width": 2.5,
-                        "shape": "hv"
-                        if channel in ("Brake", "nGear", "DRS", "DRSActive")
-                        else "linear",
-                    },
-                    opacity=0.95,
                     hovertemplate="Distance %{x:.0f} m<br>%{y:.2f}<extra></extra>",
                 )
             )
@@ -58,27 +42,6 @@ class TelemetryPlotFactory:
 
     def delta_trace(self, aligned: pd.DataFrame) -> go.Figure:
         fig = go.Figure()
-        delta_columns = [column for column in aligned if column.startswith("Delta_")]
-        if delta_columns:
-            for index, column in enumerate(delta_columns):
-                driver = column.removeprefix("Delta_")
-                order = aligned.attrs.get("driver_order", [])
-                color_index = order.index(driver) if driver in order else index + 1
-                fig.add_scatter(
-                    x=aligned["Distance"],
-                    y=aligned[column],
-                    mode="lines",
-                    name=driver,
-                    line={
-                        "color": DRIVER_COLORS[color_index % 4],
-                        "dash": DRIVER_DASHES[color_index % 4],
-                    },
-                )
-            fig.add_hline(y=0, line_dash="dash")
-            reference = aligned.attrs.get("reference_driver", "reference")
-            return self._finish_trace_layout(
-                fig, f"Delta vs {reference} (positive = behind)", y_axis="Seconds"
-            )
         if "DeltaSeconds" in aligned and "Distance" in aligned:
             fig.add_trace(
                 go.Scatter(
@@ -120,7 +83,7 @@ class TelemetryPlotFactory:
 
     def track_overlay(self, laps: list[LapTelemetry]) -> go.Figure:
         fig = go.Figure()
-        for index, lap in enumerate(laps):
+        for lap in laps:
             telemetry = lap.telemetry
             if not {"X", "Y"}.issubset(telemetry.columns):
                 continue
@@ -130,11 +93,6 @@ class TelemetryPlotFactory:
                     y=telemetry["Y"],
                     mode="lines",
                     name=lap.label,
-                    line={
-                        "color": DRIVER_COLORS[index % len(DRIVER_COLORS)],
-                        "dash": DRIVER_DASHES[index % len(DRIVER_DASHES)],
-                        "width": 3,
-                    },
                     hovertemplate="X %{x:.0f}<br>Y %{y:.0f}<extra></extra>",
                 )
             )
@@ -143,7 +101,7 @@ class TelemetryPlotFactory:
         fig.update_xaxes(showgrid=False, zeroline=False)
         fig.update_layout(
             template=DEFAULT_TEMPLATE,
-            title="Recorded track-position overlay (approximate)",
+            title="Racing line overlay",
             height=620,
             margin={"l": 20, "r": 20, "t": 56, "b": 20},
             legend={"orientation": "h", "y": 1.02, "x": 0},
@@ -156,11 +114,7 @@ class TelemetryPlotFactory:
 
         melted = sector_table.melt(
             id_vars=["Driver"],
-            value_vars=[
-                column
-                for column in ("Sector1", "Sector2", "Sector3")
-                if column in sector_table
-            ],
+            value_vars=[column for column in ("Sector1", "Sector2", "Sector3") if column in sector_table],
             var_name="Sector",
             value_name="Seconds",
         )
@@ -203,13 +157,7 @@ class TelemetryPlotFactory:
             color="Compound",
             facet_col="Stint",
             template=DEFAULT_TEMPLATE,
-            title="Stint lap-time trend (conditional 95% interval)",
-            error_y=(tire_table["Upper95"] - tire_table["DegradationPerLap"])
-            if "Upper95" in tire_table
-            else None,
-            error_y_minus=(tire_table["DegradationPerLap"] - tire_table["Lower95"])
-            if "Lower95" in tire_table
-            else None,
+            title="Estimated tyre degradation per lap",
         )
         fig.update_layout(height=460, margin={"l": 20, "r": 20, "t": 56, "b": 20})
         return fig
@@ -222,13 +170,9 @@ class TelemetryPlotFactory:
             clustered_laps,
             x="LapNumber",
             y="LapTimeSeconds",
-            color=clustered_laps["Cluster"].astype(str),
+            color="Cluster",
             symbol="Driver",
-            hover_data=[
-                column
-                for column in ("Compound", "TyreLife")
-                if column in clustered_laps
-            ],
+            hover_data=[column for column in ("Compound", "TyreLife") if column in clustered_laps],
             template=DEFAULT_TEMPLATE,
             title="Lap clustering",
         )

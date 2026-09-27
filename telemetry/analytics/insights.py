@@ -33,25 +33,16 @@ class DriverInsightEngine:
                     f"{lap.driver} peak speed: {telemetry['Speed'].max():.1f} km/h; "
                     f"minimum speed: {telemetry['Speed'].min():.1f} km/h."
                 )
-            if {"Throttle", "Distance"}.issubset(telemetry):
-                from telemetry.analytics.features import driving_features
-
-                features = driving_features([lap])
-                full_throttle = (
-                    float(features.iloc[0]["FullThrottleShare"] * 100)
-                    if not features.empty
-                    else np.nan
-                )
-                insights.append(
-                    f"{lap.driver} full-throttle distance share: {full_throttle:.1f}%."
-                )
+            if "Throttle" in telemetry:
+                full_throttle = float((telemetry["Throttle"] > 95).mean() * 100)
+                insights.append(f"{lap.driver} full-throttle distance share: {full_throttle:.1f}%.")
 
         if "DeltaSeconds" in aligned:
             delta = aligned["DeltaSeconds"].dropna()
             if not delta.empty:
                 direction = "behind" if delta.iloc[-1] > 0 else "ahead"
                 insights.append(
-                    f"At the end of shared distance coverage, comparison driver is {abs(delta.iloc[-1]):.3f}s {direction}."
+                    f"Finish-line delta trend: comparison driver is {abs(delta.iloc[-1]):.3f}s {direction}."
                 )
 
         return insights[:8]
@@ -124,16 +115,14 @@ class ConsistencyAnalyzer:
             MedianLap="median",
             StdDev="std",
         ).reset_index()
-        summary["ConsistencyScore"] = 100 / (1 + summary["StdDev"])
+        summary["ConsistencyScore"] = 100 / (1 + summary["StdDev"].fillna(0))
         return summary.sort_values(["BestLap", "StdDev"]).reset_index(drop=True)
 
 
 class TireDegradationAnalyzer:
     """Estimate stint-level tyre degradation from lap-time trend."""
 
-    def summarize(
-        self, lap_table: pd.DataFrame, driver: str | None = None
-    ) -> pd.DataFrame:
+    def summarize(self, lap_table: pd.DataFrame, driver: str | None = None) -> pd.DataFrame:
         if lap_table.empty or "LapTimeSeconds" not in lap_table:
             return pd.DataFrame()
 

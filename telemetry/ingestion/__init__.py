@@ -4,6 +4,7 @@ from telemetry.ingestion.fastf1_session_loader import (
     FastF1NotInstalledError,
     FastF1SessionLoader,
 )
+
 __all__ = [
     "COMMON_GRAND_PRIX_NAMES",
     "FastF1DataLoadError",

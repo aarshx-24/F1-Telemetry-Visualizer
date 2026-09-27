@@ -30,7 +30,6 @@ DEFAULT_COMPARISON_CHANNELS = (
     "RPM",
     "nGear",
     "DRS",
-    "DRSActive",
     "TimeSeconds",
 )
 
