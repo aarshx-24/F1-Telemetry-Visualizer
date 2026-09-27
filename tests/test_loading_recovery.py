@@ -31,6 +31,33 @@ def test_download_timeout_is_bounded_and_cooldown_blocks_retry(tmp_path, monkeyp
     assert not client.fetch(REQUEST)
     assert run.call_count == 1
     assert run.call_args.kwargs["timeout"] == 1
+    assert "time limit" in client.failure_message(REQUEST)
+    assert "cooldown" in client.failure_message(REQUEST)
+
+
+def test_busy_downloader_is_not_reported_as_missing_event(tmp_path, monkeypatch):
+    from filelock import Timeout
+
+    lock = Mock()
+    lock.__enter__ = Mock(side_effect=Timeout("download.lock"))
+    lock.__exit__ = Mock()
+    monkeypatch.setattr(
+        "telemetry.ingestion.live_client.FileLock", Mock(return_value=lock)
+    )
+    client = LiveSessionClient(build_settings(tmp_path))
+    assert not client.fetch(REQUEST)
+    assert "Another session is downloading" in client.failure_message(REQUEST)
+
+
+def test_worker_stderr_is_not_exposed_to_visitors(tmp_path, monkeypatch):
+    run = Mock(
+        return_value=subprocess.CompletedProcess([], 1, "", "private-token-example")
+    )
+    monkeypatch.setattr("telemetry.ingestion.live_client.subprocess.run", run)
+    client = LiveSessionClient(build_settings(tmp_path))
+    assert not client.fetch(REQUEST)
+    assert "private-token-example" not in client.failure_message(REQUEST)
+    assert "server logs" in client.failure_message(REQUEST)
 
 
 def test_worker_failure_is_not_success(tmp_path, monkeypatch):
@@ -145,6 +172,32 @@ def test_existing_v1_archive_is_readable():
     assert store.contains(request)
     result = store.load_comparison(request, ["VER", "LEC"])
     assert len(result.laps) == 2
+
+
+def test_abu_dhabi_archive_opens_without_downloader():
+    settings = build_settings()
+    request = SessionRequest(2023, "Abu Dhabi Grand Prix", "Q")
+    client = Mock()
+    client.fetch.side_effect = AssertionError("Prepared data must not download")
+    service = SessionService(settings, client)
+    service.stores = (
+        (
+            ProcessedTelemetryStore(settings.processed_data_dir / "prebuilt"),
+            "Prepared FastF1 archive",
+        ),
+    )
+    dataset = service.open(request)
+    assert dataset is not None
+    assert len(dataset.drivers) == 20
+    selections = {
+        driver: min(
+            (lap for lap in dataset.laps if lap.driver == driver),
+            key=lambda lap: lap.lap_time_seconds,
+        ).lap_number
+        for driver in ["VER", "LEC"]
+    }
+    assert service.compare(dataset, selections) is not None
+    client.fetch.assert_not_called()
 
 
 def test_interrupted_manifest_publication_keeps_previous_generation(

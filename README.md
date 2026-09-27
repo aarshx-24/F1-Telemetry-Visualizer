@@ -204,6 +204,19 @@ To update the deployed site:
 
 ## Notes
 
+Lap selectors show saved telemetry only by default. The separate online-lap option
+exposes timing-only laps that require another download; their availability is not
+guaranteed. Existing prepared archives contain fastest-lap telemetry per driver,
+not every lap. A complete lap timing table does not imply complete telemetry storage.
+
+The prepared catalog also includes **2023 Abu Dhabi Grand Prix qualifying** with
+fastest-lap telemetry for 20 drivers. Commit the entire corresponding folder under
+`data/processed/prebuilt/` to make it available on the deployed website.
+Download status now distinguishes a busy worker, a deadline, a process-start failure
+and an unsuccessful worker. It also shows the remaining retry cooldown. These
+diagnostics do not claim to fix an unknown hosting/network failure; Cloud logs are
+still needed to diagnose unavailable unprepared sessions.
+
 FastF1 depends on external Formula 1 timing data sources. Prepared datasets isolate
 the public dashboard from temporary upstream outages. The interface identifies its
 active source and snapshot date. CSV exports and HTML charts preserve provenance.

@@ -20,6 +20,9 @@ class SessionClient(Protocol):
         self, request: SessionRequest, selections: dict[str, int] | None = None
     ) -> bool: ...
     def calendar(self, year: int) -> list[str]: ...
+    def failure_message(
+        self, request: SessionRequest, selections: dict[str, int] | None = None
+    ) -> str: ...
 
 
 @dataclass(frozen=True)

@@ -86,8 +86,9 @@ def main() -> None:
             dataset = service().open(request, refresh=refresh)
         if dataset is None:
             st.info(
-                "This session is temporarily unavailable. Choose a saved session or try again later. No synthetic data has been substituted."
+                "The requested session has not loaded. No synthetic data has been substituted."
             )
+            st.caption(service().client.failure_message(request))
             return
         defaults = [driver for driver in ("VER", "LEC") if driver in dataset.drivers]
         selected = st.sidebar.multiselect(
@@ -100,6 +101,15 @@ def main() -> None:
             st.info("Select at least two drivers.")
             return
         selections = {}
+        include_online = st.sidebar.checkbox(
+            "Include laps requiring an online download",
+            value=False,
+            key=f"online_laps_{request.label}",
+        )
+        if include_online:
+            st.sidebar.caption(
+                "These laps have timing records but no saved telemetry. Availability depends on the FastF1 connection."
+            )
         for driver in selected:
             saved = [lap for lap in dataset.laps if lap.driver == driver]
             fastest = min(saved, key=lambda lap: lap.lap_time_seconds).lap_number
@@ -107,24 +117,39 @@ def main() -> None:
             rows = table[table["Driver"].eq(driver)].dropna(
                 subset=["LapNumber", "LapTimeSeconds"]
             )
-            numbers = sorted(set(rows["LapNumber"].astype(int)) | {fastest})
             saved_numbers = {lap.lap_number for lap in saved}
+            numbers = (
+                sorted(saved_numbers | set(rows["LapNumber"].astype(int)))
+                if include_online
+                else sorted(saved_numbers)
+            )
+            st.sidebar.caption(
+                f"{driver}: telemetry saved for {len(saved_numbers)} laps."
+            )
+            selection_key = f"lap_{request.label}_{driver}_{include_online}"
+            if st.session_state.get(selection_key, fastest) not in numbers:
+                st.session_state[selection_key] = fastest
             selections[driver] = st.sidebar.selectbox(
                 f"{driver} lap",
                 numbers,
                 index=numbers.index(fastest),
                 format_func=lambda number, stored=saved_numbers: (
                     f"Lap {number}"
-                    + (" (saved)" if number in stored else " (download)")
+                    + (
+                        " (saved)"
+                        if number in stored
+                        else " (requires online download)"
+                    )
                 ),
-                key=f"lap_{request.label}_{driver}",
+                key=selection_key,
             )
         with st.spinner("Opening selected laps..."):
             comparison = service().compare(dataset, selections)
         if comparison is None:
             st.info(
-                "The selected lap could not be retrieved. Select a lap marked saved, or retry later."
+                "The selected lap could not be retrieved. Turn off 'Include laps requiring an online download' to return to saved telemetry. No other lap has been substituted."
             )
+            st.caption(service().client.failure_message(request, selections))
             return
         if any(
             not any(
