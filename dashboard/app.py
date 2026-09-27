@@ -1,346 +1,152 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
+import logging
 import sys
+from dataclasses import replace
 from pathlib import Path
-from typing import Any
-
-import pandas as pd
-import streamlit as st
 
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+import streamlit as st
+
 from config.settings import build_settings
-from dashboard.components.sidebar import render_driver_controls, render_request_controls
 from dashboard.components.summary import render_lap_metrics
-from telemetry.analytics import (
-    BrakingAnalyzer,
-    ConsistencyAnalyzer,
-    CornerPerformanceAnalyzer,
-    LapClusterAnalyzer,
-    TelemetryAnomalyDetector,
-    TireDegradationAnalyzer,
-)
-from telemetry.comparison import DriverComparisonService
+from dashboard.views import render_tabs
+from telemetry.application.sessions import SessionDataset, SessionService
 from telemetry.domain import SessionRequest
-from telemetry.ingestion.fastf1_session_loader import (
-    FastF1DataLoadError,
-    FastF1SessionLoader,
-)
 from telemetry.ingestion.demo_data import DemoTelemetryFactory
-from telemetry.ingestion.processed_store import ProcessedTelemetryStore
-from telemetry.processing import TelemetryExtractor
-from telemetry.visualization import TelemetryPlotFactory
+from telemetry.ingestion.processed_store import ProcessedSession
+from telemetry.ingestion.calendar import COMMON_GRAND_PRIX_NAMES
+
+LOG = logging.getLogger(__name__)
+st.set_page_config(page_title="F1 Telemetry Visualizer", layout="wide")
 
 
-FALLBACK_DRIVER_OPTIONS = [
-    "VER", "PER", "LEC", "SAI", "HAM", "RUS", "NOR", "PIA",
-    "ALO", "STR", "GAS", "OCO", "ALB", "SAR", "TSU", "RIC",
-    "LAW", "BOT", "ZHO", "HUL", "MAG",
-]
-
-st.set_page_config(
-    page_title="F1 Telemetry Visualizer",
-    page_icon=None,
-    layout="wide",
-    initial_sidebar_state="expanded",
-)
-
-st.markdown(
-    """
-    <style>
-    .block-container {padding-top: 1.3rem; padding-bottom: 2rem;}
-    [data-testid="stMetric"] {background: #111827; border: 1px solid #243244; padding: 0.8rem; border-radius: 8px;}
-    [data-testid="stSidebar"] {background: #0b1220;}
-    h1, h2, h3 {letter-spacing: 0;}
-    </style>
-    """,
-    unsafe_allow_html=True,
-)
+@st.cache_resource
+def service() -> SessionService:
+    return SessionService(build_settings(ROOT))
 
 
-@st.cache_resource(show_spinner=False)
-def load_session(request: SessionRequest, telemetry: bool) -> Any:
-    settings = build_settings(ROOT)
-    loader = FastF1SessionLoader(settings=settings)
-    return loader.load_session(request, telemetry=telemetry)
+def session_controls() -> SessionRequest:
+    catalog = service().catalog()
+    selection = st.sidebar.selectbox(
+        "Session source", ["Saved sessions", "Fetch another session"]
+    )
+    if selection == "Saved sessions" and catalog:
+        return st.sidebar.selectbox(
+            "Available session", catalog, format_func=lambda item: item.label
+        )
+    from datetime import date
 
-
-@st.cache_data(show_spinner=False)
-def load_grand_prix_options(year: int) -> list[str]:
-    settings = build_settings(ROOT)
-    loader = FastF1SessionLoader(settings=settings)
-    return loader.list_grand_prix(year)
-
-
-@st.cache_data(show_spinner=False)
-def load_processed_drivers(request: SessionRequest) -> list[str]:
-    settings = build_settings(ROOT)
-    store = ProcessedTelemetryStore(settings.processed_data_dir / "prebuilt")
-    return store.available_drivers(request) if store.contains(request) else []
-
-
-@st.cache_data(show_spinner=False)
-def load_processed_data(
-    request: SessionRequest,
-    drivers: tuple[str, ...],
-) -> tuple[Any, Any]:
-    settings = build_settings(ROOT)
-    store = ProcessedTelemetryStore(settings.processed_data_dir / "prebuilt")
-    return store.load_session(request), store.load_comparison(request, list(drivers))
+    year = int(st.sidebar.number_input("Year", 2018, date.today().year, 2024))
+    # The static list remains usable when the schedule endpoint is unavailable.
+    options = sorted(set(COMMON_GRAND_PRIX_NAMES))
+    if st.sidebar.button("Refresh Grand Prix calendar"):
+        try:
+            names = service().client.calendar(year)
+            if names:
+                st.session_state[f"calendar_{year}"] = names
+        except Exception:
+            LOG.exception("Calendar refresh unavailable")
+    options = st.session_state.get(f"calendar_{year}", options)
+    gp = st.sidebar.selectbox("Grand Prix", options)
+    kind = st.sidebar.selectbox("Session", ["Q", "R", "SQ", "S", "FP1", "FP2", "FP3"])
+    return SessionRequest(year, gp, kind)
 
 
 def main() -> None:
     st.title("F1 Telemetry Visualizer")
-
-    st.sidebar.header("Session")
-    selected_year = int(st.sidebar.number_input("Year", min_value=2018, max_value=2026, value=2024))
-    grand_prix_options = load_grand_prix_options(selected_year)
-    request, frequency_hz = render_request_controls(grand_prix_options, selected_year)
-    if st.sidebar.button("Clear session cache"):
-        load_session.clear()
-        load_grand_prix_options.clear()
-        load_processed_drivers.clear()
-        load_processed_data.clear()
-        st.rerun()
-
-    extractor = TelemetryExtractor()
-    processed_drivers = load_processed_drivers(request)
-
-    if processed_drivers:
-        drivers = processed_drivers
+    mode = st.sidebar.radio("Data mode", ["Real sessions", "Demonstration"])
+    if mode == "Demonstration":
+        selected = st.sidebar.multiselect(
+            "Drivers", ["VER", "LEC", "HAM", "NOR"], ["VER", "LEC"], max_selections=4
+        )
+        if len(selected) < 2:
+            st.info("Select at least two drivers.")
+            return
+        request = SessionRequest(2024, "Synthetic circuit", "DEMO")
+        factory = DemoTelemetryFactory()
+        comparison = factory.build_comparison(request, selected)
+        demo_session = factory.build_session(selected)
+        dataset = SessionDataset(
+            request,
+            ProcessedSession(
+                demo_session.laps, demo_session.get_circuit_info().corners
+            ),
+            comparison.laps,
+            "SYNTHETIC DEMONSTRATION - not race data",
+            "synthetic",
+        )
     else:
-        timing_session = _safe_load_session(request, telemetry=False, show_error=False)
-        if timing_session is None:
-            drivers = FALLBACK_DRIVER_OPTIONS
-        else:
-            try:
-                drivers = extractor.available_drivers(timing_session)
-            except Exception:
-                drivers = FALLBACK_DRIVER_OPTIONS
-
-    controls = render_driver_controls(request, frequency_hz, drivers)
-
-    selected_drivers = controls.selected_drivers or drivers[:2]
-    if len(selected_drivers) < 2:
-        st.info("Select at least two drivers.")
-        return
-
-    plotter = TelemetryPlotFactory()
-    if processed_drivers and set(selected_drivers).issubset(processed_drivers):
-        with st.spinner(f"Loading prepared telemetry for {request.label}"):
-            session, comparison = load_processed_data(request, tuple(selected_drivers))
-        laps = list(comparison.laps)
-        lap_table = session.laps
-        st.caption("Data source: prepared FastF1 telemetry")
-        render_lap_metrics(laps)
-        _render_analysis_tabs(session, extractor, laps, lap_table, plotter, comparison)
-        return
-
-    st.info("Loading live FastF1 telemetry. Prepared sessions open instantly.")
-    session = _safe_load_session(request, telemetry=True, show_error=False)
-    if session is None:
-        st.warning(
-            "Live FastF1 is temporarily unavailable for this session. "
-            "Showing clearly labelled demonstration telemetry instead."
+        request = session_controls()
+        refresh = st.sidebar.button("Refresh from FastF1")
+        with st.spinner("Opening session data..."):
+            dataset = service().open(request, refresh=refresh)
+        if dataset is None:
+            st.info(
+                "This session is temporarily unavailable. Choose a saved session or try again later. No synthetic data has been substituted."
+            )
+            return
+        defaults = [driver for driver in ("VER", "LEC") if driver in dataset.drivers]
+        selected = st.sidebar.multiselect(
+            "Drivers",
+            dataset.drivers,
+            defaults or dataset.drivers[:2],
+            max_selections=4,
         )
-        demo_factory = DemoTelemetryFactory()
-        comparison = demo_factory.build_comparison(controls.request, selected_drivers)
-        demo_session = demo_factory.build_session(selected_drivers)
-        laps = list(comparison.laps)
-        lap_table = demo_session.laps
-        st.caption("Data source: demonstration telemetry (not official FastF1 data)")
-        render_lap_metrics(laps)
-        _render_analysis_tabs(demo_session, extractor, laps, lap_table, plotter, comparison)
-        return
-
-    comparison_service = DriverComparisonService(extractor=extractor)
-
-    try:
-        comparison = comparison_service.compare_fastest_laps(
-            session,
-            controls.request,
-            selected_drivers,
-            frequency=controls.frequency_hz,
-        )
-    except Exception as exc:
-        st.error(f"Could not build driver comparison: {exc}")
-        return
-
-    laps = list(comparison.laps)
-    lap_table = extractor.lap_table(session)
-    st.caption("Data source: live FastF1 telemetry")
-    render_lap_metrics(laps)
-
-    _render_analysis_tabs(session, extractor, laps, lap_table, plotter, comparison)
-
-
-def _render_analysis_tabs(
-    session: Any,
-    extractor: TelemetryExtractor,
-    laps: list[Any],
-    lap_table: pd.DataFrame,
-    plotter: TelemetryPlotFactory,
-    comparison: Any,
-) -> None:
-    tabs = st.tabs(["Compare", "Track", "Analytics", "ML", "Data"])
-
-    with tabs[0]:
-        _render_compare_tab(plotter, comparison, laps)
-
-    with tabs[1]:
-        _render_track_tab(plotter, laps)
-
-    with tabs[2]:
-        _render_analytics_tab(session, extractor, laps, lap_table, plotter)
-
-    with tabs[3]:
-        _render_ml_tab(lap_table, plotter)
-
-    with tabs[4]:
-        _render_data_tab(lap_table, comparison.sector_table)
-
-def _safe_load_session(
-    request: SessionRequest,
-    *,
-    telemetry: bool,
-    show_error: bool = True,
-) -> Any | None:
-    load_type = "telemetry" if telemetry else "timing"
-    with st.spinner(f"Loading {load_type} data for {request.label}"):
-        try:
-            return load_session(request, telemetry)
-        except FastF1DataLoadError as exc:
-            if show_error:
-                st.error(str(exc))
-                st.info("Use the sidebar button 'Clear session cache', then try again.")
-            return None
-        except Exception as exc:
-            if show_error:
-                st.error(f"Session load failed: {exc}")
-            return None
-
-
-def _render_compare_tab(
-    plotter: TelemetryPlotFactory,
-    comparison: Any,
-    laps: list[Any],
-) -> None:
-    left, right = st.columns(2)
-    with left:
-        st.plotly_chart(
-            plotter.telemetry_overlay(laps, "Speed", title="Speed comparison"),
-            width="stretch",
-        )
-        st.plotly_chart(
-            plotter.telemetry_overlay(laps, "Throttle", title="Throttle comparison"),
-            width="stretch",
-        )
-    with right:
-        st.plotly_chart(plotter.delta_trace(comparison.aligned), width="stretch")
-        st.plotly_chart(
-            plotter.telemetry_overlay(laps, "Brake", title="Brake comparison"),
-            width="stretch",
-        )
-
-    gear, rpm = st.columns(2)
-    with gear:
-        st.plotly_chart(
-            plotter.telemetry_overlay(laps, "nGear", title="Gear comparison"),
-            width="stretch",
-        )
-    with rpm:
-        st.plotly_chart(
-            plotter.telemetry_overlay(laps, "RPM", title="RPM comparison"),
-            width="stretch",
-        )
-
-    st.plotly_chart(plotter.sector_bars(comparison.sector_table), width="stretch")
-    if comparison.insights:
-        st.subheader("Insights")
-        for insight in comparison.insights:
-            st.write(f"- {insight}")
-
-
-def _render_track_tab(plotter: TelemetryPlotFactory, laps: list[Any]) -> None:
-    heatmap, overlay = st.columns(2)
-    with heatmap:
-        st.plotly_chart(plotter.track_speed_map(laps[0]), width="stretch")
-    with overlay:
-        st.plotly_chart(plotter.track_overlay(laps), width="stretch")
-
-
-def _render_analytics_tab(
-    session: Any,
-    extractor: TelemetryExtractor,
-    laps: list[Any],
-    lap_table: pd.DataFrame,
-    plotter: TelemetryPlotFactory,
-) -> None:
-    consistency = ConsistencyAnalyzer().summarize(lap_table)
-    tire_degradation = TireDegradationAnalyzer().summarize(lap_table)
-
-    first, second = st.columns(2)
-    with first:
-        st.subheader("Consistency")
-        st.dataframe(consistency, width="stretch", hide_index=True)
-    with second:
-        st.subheader("Tyre Degradation")
-        st.dataframe(tire_degradation, width="stretch", hide_index=True)
-
-    st.plotly_chart(plotter.lap_time_scatter(lap_table), width="stretch")
-    st.plotly_chart(plotter.tire_degradation(tire_degradation), width="stretch")
-
-    braking_rows = [BrakingAnalyzer().detect_braking_zones(lap) for lap in laps]
-    braking = pd.concat(braking_rows, ignore_index=True) if braking_rows else pd.DataFrame()
-    st.subheader("Braking Zones")
-    st.dataframe(braking, width="stretch", hide_index=True)
-
-    circuit_info = session.get_circuit_info()
-    corner_rows = [
-        CornerPerformanceAnalyzer().summarize(lap, circuit_info)
-        for lap in laps
-    ]
-    corner_table = pd.concat(corner_rows, ignore_index=True) if corner_rows else pd.DataFrame()
-    st.subheader("Corner Performance")
-    st.dataframe(corner_table, width="stretch", hide_index=True)
-
-
-def _render_ml_tab(lap_table: pd.DataFrame, plotter: TelemetryPlotFactory) -> None:
-    clusters = LapClusterAnalyzer().cluster_laps(lap_table)
-    anomalies = TelemetryAnomalyDetector().detect(lap_table)
-
-    st.plotly_chart(plotter.cluster_scatter(clusters), width="stretch")
-
-    left, right = st.columns(2)
-    with left:
-        st.subheader("Clustered Laps")
-        st.dataframe(clusters, width="stretch", hide_index=True)
-    with right:
-        st.subheader("Anomaly Detection")
-        st.dataframe(anomalies, width="stretch", hide_index=True)
-
-
-def _render_data_tab(lap_table: pd.DataFrame, sector_table: pd.DataFrame) -> None:
-    st.subheader("Lap Data")
-    st.dataframe(lap_table, width="stretch", hide_index=True)
-    st.download_button(
-        label="Download lap data CSV",
-        data=lap_table.to_csv(index=False),
-        file_name="lap_data.csv",
-        mime="text/csv",
-    )
-
-    st.subheader("Sector Data")
-    st.dataframe(sector_table, width="stretch", hide_index=True)
-    st.download_button(
-        label="Download sector data CSV",
-        data=sector_table.to_csv(index=False),
-        file_name="sector_data.csv",
-        mime="text/csv",
-    )
+        if len(selected) < 2:
+            st.info("Select at least two drivers.")
+            return
+        selections = {}
+        for driver in selected:
+            saved = [lap for lap in dataset.laps if lap.driver == driver]
+            fastest = min(saved, key=lambda lap: lap.lap_time_seconds).lap_number
+            table = dataset.session.laps
+            rows = table[table["Driver"].eq(driver)].dropna(
+                subset=["LapNumber", "LapTimeSeconds"]
+            )
+            numbers = sorted(set(rows["LapNumber"].astype(int)) | {fastest})
+            saved_numbers = {lap.lap_number for lap in saved}
+            selections[driver] = st.sidebar.selectbox(
+                f"{driver} lap",
+                numbers,
+                index=numbers.index(fastest),
+                format_func=lambda number, stored=saved_numbers: (
+                    f"Lap {number}"
+                    + (" (saved)" if number in stored else " (download)")
+                ),
+                key=f"lap_{request.label}_{driver}",
+            )
+        with st.spinner("Opening selected laps..."):
+            comparison = service().compare(dataset, selections)
+        if comparison is None:
+            st.info(
+                "The selected lap could not be retrieved. Select a lap marked saved, or retry later."
+            )
+            return
+        if any(
+            not any(
+                saved.driver == lap.driver and saved.lap_number == lap.lap_number
+                for saved in dataset.laps
+            )
+            for lap in comparison.laps
+        ):
+            refreshed = service().open(request)
+            if refreshed is not None:
+                dataset = replace(refreshed, source="Downloaded FastF1 archive")
+    st.caption(f"{dataset.source} | {request.label} | Snapshot: {dataset.generated_at}")
+    reference = st.sidebar.selectbox("Reference driver", selected)
+    render_lap_metrics(list(comparison.laps))
+    render_tabs(dataset, comparison, reference)
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except Exception:
+        LOG.exception("Dashboard request could not be completed")
+        st.info(
+            "This view is temporarily unavailable. Choose a saved session or retry later. Technical details have been recorded in the server logs."
+        )

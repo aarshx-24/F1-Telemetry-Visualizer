@@ -6,6 +6,7 @@ readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
     "fastf1>=3.8.1,<4.0",
+    "filelock>=3.13,<4.0",
     "pandas>=2.2,<3.0",
     "numpy>=1.26,<3.0",
     "matplotlib>=3.8,<4.0",
@@ -20,7 +21,7 @@ analytics = [
     "scikit-learn>=1.4,<2.0",
 ]
 dashboard = [
-    "streamlit>=1.35,<2.0",
+    "streamlit>=1.49,<2.0",
     "dash>=2.16,<4.0",
 ]
 dev = [

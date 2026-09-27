@@ -7,7 +7,7 @@ from telemetry.analytics.insights import (
     DriverInsightEngine,
     TireDegradationAnalyzer,
 )
-from telemetry.analytics.ml import LapClusterAnalyzer, TelemetryAnomalyDetector
+from telemetry.analytics.exploratory import LapClusterAnalyzer, TelemetryAnomalyDetector
 
 __all__ = [
     "BrakingAnalyzer",

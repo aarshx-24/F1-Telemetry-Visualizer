@@ -42,7 +42,9 @@ class TelemetryExtractor:
 
         for column in LAP_TIME_COLUMNS:
             if column in laps.columns:
-                laps[f"{column}Seconds"] = pd.to_timedelta(laps[column]).dt.total_seconds()
+                laps[f"{column}Seconds"] = pd.to_timedelta(
+                    laps[column]
+                ).dt.total_seconds()
 
         useful_columns = [
             column
@@ -60,6 +62,8 @@ class TelemetryExtractor:
                 "TrackStatus",
                 "PitOutTime",
                 "PitInTime",
+                "Deleted",
+                "IsAccurate",
             )
             if column in laps.columns
         ]
@@ -131,7 +135,9 @@ class TelemetryExtractor:
             raise TelemetryExtractionError("Session contains no lap data.")
 
         pick_drivers = getattr(laps, "pick_drivers", None)
-        driver_laps = pick_drivers(driver) if pick_drivers else laps[laps["Driver"] == driver]
+        driver_laps = (
+            pick_drivers(driver) if pick_drivers else laps[laps["Driver"] == driver]
+        )
         driver_laps = driver_laps[driver_laps["LapTime"].notna()]
 
         if driver_laps.empty:
@@ -162,7 +168,13 @@ class TelemetryExtractor:
         if get_telemetry is None:
             raise TelemetryExtractionError("Selected lap cannot provide telemetry.")
 
-        raw_telemetry = get_telemetry(frequency=frequency)
+        try:
+            raw_telemetry = get_telemetry(frequency=frequency)
+        except Exception:
+            # Car channels remain useful when the separate position feed is absent.
+            raw_telemetry = lap.get_car_data().add_distance()
+        if raw_telemetry.empty:
+            raise TelemetryExtractionError("Selected lap has no car telemetry.")
         telemetry = self._cleaner.prepare_lap_telemetry(raw_telemetry)
 
         return LapTelemetry(

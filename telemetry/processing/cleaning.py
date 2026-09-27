@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import numpy as np
 import pandas as pd
 
 from telemetry.processing.schemas import CAR_CHANNELS, POSITION_CHANNELS
@@ -11,9 +10,8 @@ class TelemetryCleaner:
     """Prepare FastF1 telemetry for comparison and visualization."""
 
     def prepare_lap_telemetry(self, telemetry: pd.DataFrame) -> pd.DataFrame:
+        telemetry = self._add_distance_if_available(telemetry)
         frame = pd.DataFrame(telemetry).copy()
-
-        frame = self._add_distance_if_available(frame)
         frame = add_seconds_column(frame, "Time", "TimeSeconds")
         frame = add_seconds_column(frame, "SessionTime", "SessionTimeSeconds")
         frame = self._coerce_numeric_channels(frame)
@@ -50,10 +48,19 @@ class TelemetryCleaner:
     @staticmethod
     def _normalize_binary_channels(frame: pd.DataFrame) -> pd.DataFrame:
         if "Brake" in frame.columns:
-            frame["Brake"] = frame["Brake"].fillna(False).astype(bool).astype(int)
+            frame["Brake"] = (
+                frame["Brake"]
+                .astype(float)
+                .where(frame["Brake"].isna(), (frame["Brake"] > 0.5).astype(float))
+            )
 
         if "DRS" in frame.columns:
-            frame["DRSActive"] = np.where(frame["DRS"].fillna(0).astype(float) >= 10, 1, 0)
+            frame["DRSActive"] = (
+                frame["DRS"]
+                .isin([10, 12, 14])
+                .astype(float)
+                .where(frame["DRS"].notna())
+            )
 
         return frame
 

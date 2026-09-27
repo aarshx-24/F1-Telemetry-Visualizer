@@ -15,16 +15,16 @@ FastF1 local ingestion -> processed telemetry files -> Streamlit dashboard
 ```
 
 Prepared sessions do not depend on a live FastF1 download when a visitor opens the
-site. Live FastF1 remains available for sessions that have not been prepared, and a
-clearly labelled demonstration dataset keeps the interface usable if the upstream
-timing service is unavailable.
+site. Unprepared sessions use a bounded FastF1 download worker. If that service is
+unavailable, the page shows a neutral availability message, not a traceback.
+Synthetic data is available only through the explicit Demonstration mode.
 
 ## What It Does
 
 - Loads Formula 1 sessions using FastF1
 - Caches race/session data for faster repeat analysis
 - Extracts lap and telemetry data
-- Compares fastest laps between drivers
+- Compares selected laps for two to four drivers, with a selectable reference
 - Aligns telemetry by distance for fair driver comparison
 - Visualizes speed, throttle, brake, RPM, gear, and DRS traces
 - Shows delta-time comparison
@@ -32,8 +32,11 @@ timing service is unavailable.
 - Compares sector performance
 - Estimates braking-zone behavior
 - Computes consistency and pace metrics
-- Estimates tyre degradation trends
-- Performs lap clustering and anomaly detection
+- Filters pit, deleted, inaccurate, non-green and unusually slow laps with an audit
+- Estimates stint pace trends with conditional 95% intervals and optional fuel scenarios
+- Selects K-means groups using silhouette scores and reports seed stability
+- Offers timing or distance-weighted driving features where telemetry is available
+- Reports continuous Isolation Forest scores and descriptive feature deviations
 - Exports CSV data and HTML reports
 
 ## Use The Online App
@@ -45,11 +48,10 @@ https://f1-telemetry-visualizer.streamlit.app/
 Recommended first test:
 
 ```text
-Year: 2024
-Grand Prix: Italian Grand Prix
-Session: Q
+Data mode: Real sessions
+Session source: Saved sessions
+Available session: 2024 Italian Grand Prix Q
 Drivers: VER and LEC
-Telemetry frequency: 10
 ```
 
 The included 2024 Italian Grand Prix qualifying comparison is prepared in advance,
@@ -144,11 +146,12 @@ project_root/
 The codebase is split into reusable layers:
 
 - `telemetry.ingestion`: FastF1 loading, cache setup, and processed telemetry storage
+- `telemetry.application`: session orchestration and data provenance, with an injectable download client
 - `telemetry.processing`: telemetry cleaning, lap extraction, and distance alignment
 - `telemetry.comparison`: driver-vs-driver comparison workflows
 - `telemetry.analytics`: braking, consistency, tyre, corner, clustering, and anomaly analysis
 - `telemetry.visualization`: reusable Plotly figure builders
-- `dashboard`: Streamlit user interface
+- `dashboard/app.py`: session and lap selection; `dashboard/views.py`: analysis presentation
 - `main.py`: command-line workflows
 
 ## Setup For Development
@@ -172,11 +175,10 @@ Run tests:
 .\.venv\Scripts\python.exe -m pytest
 ```
 
-Expected result:
-
-```text
-7 passed
-```
+Tests cover numerical analysis, legacy archives, atomic archive generations,
+offline recovery, download deadlines, ML edge cases and Streamlit interactions.
+Network access is not required by the test suite. See `docs/reliability_and_analytics.md`
+for model assumptions and deployment checks.
 
 ## Deployment
 
@@ -194,8 +196,8 @@ Dependencies: requirements.txt
 
 To update the deployed site:
 
-1. Edit code locally.
-2. Commit changes in VS Code or Git.
+1. Install the updated requirements and run tests locally.
+2. Commit all changed code and newly added modules, not only `dashboard/app.py`.
 3. Push to GitHub.
 4. Streamlit Cloud redeploys automatically.
 5. If needed, click Reboot app in Streamlit Cloud.
@@ -204,7 +206,8 @@ To update the deployed site:
 
 FastF1 depends on external Formula 1 timing data sources. Prepared datasets isolate
 the public dashboard from temporary upstream outages. The interface identifies its
-active data source as prepared FastF1, live FastF1, or demonstration telemetry.
+active source and snapshot date. CSV exports and HTML charts preserve provenance.
+This is FastF1 historical session loading, not a LiveF1 live-race streaming integration.
 
 Generated local files are intentionally ignored by Git:
 

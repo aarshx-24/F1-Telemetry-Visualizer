@@ -35,9 +35,9 @@ class DemoTelemetryFactory:
         request: SessionRequest,
         drivers: list[str],
     ) -> ComparisonResult:
-        selected = drivers[:2] if len(drivers) >= 2 else ["VER", "LEC"]
+        selected = drivers[:4] if len(drivers) >= 2 else ["VER", "LEC"]
         laps = [self._build_lap(driver, index) for index, driver in enumerate(selected)]
-        aligned = DistanceTelemetryAligner().align_pair(laps[0], laps[1])
+        aligned = DistanceTelemetryAligner().align_reference(laps, laps[0].driver)
         sector_table = self._sector_table(laps)
         insights = DriverInsightEngine().build_driver_comparison_insights(laps, aligned)
         return ComparisonResult(
@@ -50,7 +50,9 @@ class DemoTelemetryFactory:
 
     def build_session(self, drivers: list[str]) -> DemoSession:
         rows: list[dict[str, object]] = []
-        selected = drivers[:6] if drivers else ["VER", "LEC", "HAM", "NOR", "ALO", "SAI"]
+        selected = (
+            drivers[:6] if drivers else ["VER", "LEC", "HAM", "NOR", "ALO", "SAI"]
+        )
         for driver_index, driver in enumerate(selected):
             base = 91.2 + driver_index * 0.28
             for lap_number in range(1, 13):
@@ -79,20 +81,33 @@ class DemoTelemetryFactory:
         progress = distance / distance.max()
         corner_profile = np.zeros_like(distance)
         for corner_distance, severity in (
-            (420, 58), (980, 92), (1450, 44), (1980, 72),
-            (2610, 64), (3350, 88), (4210, 52), (4820, 78),
+            (420, 58),
+            (980, 92),
+            (1450, 44),
+            (1980, 72),
+            (2610, 64),
+            (3350, 88),
+            (4210, 52),
+            (4820, 78),
         ):
-            corner_profile += severity * np.exp(-((distance - corner_distance) / 125) ** 2)
+            corner_profile += severity * np.exp(
+                -(((distance - corner_distance) / 125) ** 2)
+            )
 
         driver_offset = index * 0.9
         speed = 318 - corner_profile + 7 * np.sin(progress * 7 * np.pi + driver_offset)
         speed = np.clip(speed + index * 2.5, 72, 336)
         brake = (corner_profile > 36).astype(float)
-        throttle = np.clip(100 - corner_profile * 1.15 + 8 * np.cos(progress * 8 * np.pi), 0, 100)
+        throttle = np.clip(
+            100 - corner_profile * 1.15 + 8 * np.cos(progress * 8 * np.pi), 0, 100
+        )
         rpm = 8200 + speed * 34 + 650 * np.sin(progress * 20 * np.pi)
         gear = np.clip(np.floor((speed - 45) / 38), 1, 8)
-        drs = ((distance > 620) & (distance < 1160)) | ((distance > 3850) & (distance < 4610))
+        drs = ((distance > 620) & (distance < 1160)) | (
+            (distance > 3850) & (distance < 4610)
+        )
         time_seconds = np.cumsum(np.gradient(distance) / np.maximum(speed / 3.6, 1))
+        time_seconds -= time_seconds[0]
         time_seconds *= (91.4 + index * 0.32) / time_seconds[-1]
         angle = 2 * np.pi * progress
         radius = 900 + 180 * np.sin(3 * angle)
@@ -108,7 +123,8 @@ class DemoTelemetryFactory:
                 "Brake": brake,
                 "nGear": gear,
                 "RPM": rpm,
-                "DRS": drs.astype(int),
+                "DRS": drs.astype(int) * 12,
+                "DRSActive": drs.astype(int),
                 "X": x + index * 18,
                 "Y": y - index * 12,
             }

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib
 import logging
+import time
 from types import ModuleType
 from typing import Any
 
@@ -32,26 +33,31 @@ class FastF1SessionLoader:
         fastf1 = self._load_fastf1()
         self._configure_cache(fastf1)
 
-        session = fastf1.get_session(
-            request.year,
-            request.grand_prix,
-            request.session_type,
-        )
-        try:
-            session.load(
-                laps=True,
-                telemetry=telemetry,
-                weather=True,
-                messages=False,
-            )
-            self._validate_loaded_session(session, request, telemetry=telemetry)
-        except Exception as exc:
-            raise FastF1DataLoadError(
-                f"FastF1 could not fully load {request.label}. "
-                "This is usually caused by an interrupted data download, blocked network, "
-                "or a stale Streamlit cache. Clear the dashboard cache and reload the session."
-            ) from exc
-        return session
+        for attempt in range(2):
+            try:
+                session = fastf1.get_session(
+                    request.year, request.grand_prix, request.session_type
+                )
+                session.load(
+                    laps=True, telemetry=telemetry, weather=False, messages=False
+                )
+                self._validate_loaded_session(session, request, telemetry=telemetry)
+                return session
+            except Exception as exc:
+                logging.getLogger(__name__).exception(
+                    "FastF1 attempt %s for %s", attempt + 1, request.label
+                )
+                rate_limited = (
+                    "rate" in type(exc).__name__.lower()
+                    or getattr(getattr(exc, "response", None), "status_code", None)
+                    == 429
+                )
+                if attempt or isinstance(exc, ValueError) or rate_limited:
+                    raise FastF1DataLoadError(
+                        f"Session unavailable: {request.label}"
+                    ) from exc
+                time.sleep(2)
+        raise FastF1DataLoadError("Session unavailable")
 
     def load_session_summary(self, request: SessionRequest) -> SessionSummary:
         session = self.load_session(request, telemetry=False)
@@ -116,8 +122,9 @@ class FastF1SessionLoader:
             raise FastF1DataLoadError(f"No laps were loaded for {request.label}.")
 
         if telemetry:
-            _ = session.car_data
-            _ = session.pos_data
+            car_data = session.car_data
+            if not car_data or not any(not frame.empty for frame in car_data.values()):
+                raise FastF1DataLoadError("No car telemetry was loaded.")
 
     @staticmethod
     def _load_fastf1() -> ModuleType:
