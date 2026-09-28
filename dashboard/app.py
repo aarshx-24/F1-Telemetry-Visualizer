@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sys
+import logging
 from pathlib import Path
 from typing import Any
 
@@ -28,6 +29,8 @@ from telemetry.ingestion import FastF1DataLoadError, FastF1SessionLoader
 from telemetry.processing import TelemetryExtractor
 from telemetry.visualization import TelemetryPlotFactory
 
+LOG = logging.getLogger(__name__)
+
 
 st.set_page_config(
     page_title="F1 Telemetry Visualizer",
@@ -49,7 +52,7 @@ st.markdown(
 )
 
 
-@st.cache_resource(show_spinner=False)
+@st.cache_resource(show_spinner=False, max_entries=2)
 def load_session(request: SessionRequest) -> Any:
     settings = build_settings(ROOT)
     loader = FastF1SessionLoader(settings=settings)
@@ -67,7 +70,9 @@ def main() -> None:
     st.title("F1 Telemetry Visualizer")
 
     st.sidebar.header("Session")
-    selected_year = int(st.sidebar.number_input("Year", min_value=2018, max_value=2026, value=2024))
+    selected_year = int(
+        st.sidebar.number_input("Year", min_value=2018, max_value=2026, value=2024)
+    )
     grand_prix_options = load_grand_prix_options(selected_year)
     request, frequency_hz = render_request_controls(grand_prix_options, selected_year)
     if st.sidebar.button("Clear session cache"):
@@ -76,15 +81,19 @@ def main() -> None:
 
     session = _safe_load_session(request)
     if session is None:
+        render_driver_controls(request, frequency_hz, [], unavailable=True)
         return
 
     extractor = TelemetryExtractor()
     try:
         drivers = extractor.available_drivers(session)
     except Exception as exc:
-        st.error("The session was returned by FastF1, but lap data is not available yet.")
-        st.info("Click 'Clear session cache' in the sidebar, then reload the session.")
-        st.caption(str(exc))
+        LOG.exception("Driver extraction failed for %s", request.label)
+        render_driver_controls(request, frequency_hz, [], unavailable=True)
+        st.error(
+            "The session was returned by FastF1, but lap data is not available yet."
+        )
+        st.info("The full failure details have been recorded in the server logs.")
         return
     controls = render_driver_controls(request, frequency_hz, drivers)
 
@@ -134,10 +143,14 @@ def _safe_load_session(request: SessionRequest) -> Any | None:
         try:
             return load_session(request)
         except FastF1DataLoadError as exc:
+            LOG.exception("Dashboard session failure for %s", request.label)
             st.error(str(exc))
-            st.info("Use the sidebar button 'Clear session cache', then try again.")
+            st.info(
+                "The server logs contain the underlying FastF1 traceback. No data from the previously selected year is being shown."
+            )
             return None
         except Exception as exc:
+            LOG.exception("Unexpected session failure for %s", request.label)
             st.error(f"Session load failed: {exc}")
             return None
 
@@ -158,7 +171,9 @@ def _render_compare_tab(
             use_container_width=True,
         )
     with right:
-        st.plotly_chart(plotter.delta_trace(comparison.aligned), use_container_width=True)
+        st.plotly_chart(
+            plotter.delta_trace(comparison.aligned), use_container_width=True
+        )
         st.plotly_chart(
             plotter.telemetry_overlay(laps, "Brake", title="Brake comparison"),
             use_container_width=True,
@@ -176,7 +191,9 @@ def _render_compare_tab(
             use_container_width=True,
         )
 
-    st.plotly_chart(plotter.sector_bars(comparison.sector_table), use_container_width=True)
+    st.plotly_chart(
+        plotter.sector_bars(comparison.sector_table), use_container_width=True
+    )
     if comparison.insights:
         st.subheader("Insights")
         for insight in comparison.insights:
@@ -210,19 +227,24 @@ def _render_analytics_tab(
         st.dataframe(tire_degradation, use_container_width=True, hide_index=True)
 
     st.plotly_chart(plotter.lap_time_scatter(lap_table), use_container_width=True)
-    st.plotly_chart(plotter.tire_degradation(tire_degradation), use_container_width=True)
+    st.plotly_chart(
+        plotter.tire_degradation(tire_degradation), use_container_width=True
+    )
 
     braking_rows = [BrakingAnalyzer().detect_braking_zones(lap) for lap in laps]
-    braking = pd.concat(braking_rows, ignore_index=True) if braking_rows else pd.DataFrame()
+    braking = (
+        pd.concat(braking_rows, ignore_index=True) if braking_rows else pd.DataFrame()
+    )
     st.subheader("Braking Zones")
     st.dataframe(braking, use_container_width=True, hide_index=True)
 
     circuit_info = session.get_circuit_info()
     corner_rows = [
-        CornerPerformanceAnalyzer().summarize(lap, circuit_info)
-        for lap in laps
+        CornerPerformanceAnalyzer().summarize(lap, circuit_info) for lap in laps
     ]
-    corner_table = pd.concat(corner_rows, ignore_index=True) if corner_rows else pd.DataFrame()
+    corner_table = (
+        pd.concat(corner_rows, ignore_index=True) if corner_rows else pd.DataFrame()
+    )
     st.subheader("Corner Performance")
     st.dataframe(corner_table, use_container_width=True, hide_index=True)
 

@@ -4,10 +4,13 @@ import importlib
 import logging
 from types import ModuleType
 from typing import Any
+from uuid import uuid4
 
 from config.settings import ProjectSettings
 from telemetry.domain import SessionRequest, SessionSummary
 from telemetry.ingestion.calendar import COMMON_GRAND_PRIX_NAMES
+
+LOG = logging.getLogger(__name__)
 
 
 class FastF1NotInstalledError(RuntimeError):
@@ -32,12 +35,35 @@ class FastF1SessionLoader:
         fastf1 = self._load_fastf1()
         self._configure_cache(fastf1)
 
-        session = fastf1.get_session(
-            request.year,
-            request.grand_prix,
-            request.session_type,
-        )
+        reference = uuid4().hex[:12]
         try:
+            LOG.info(
+                "Session load %s: year=%s event=%s session=%s FastF1=%s",
+                reference,
+                request.year,
+                request.grand_prix,
+                request.session_type,
+                getattr(fastf1, "__version__", "unknown"),
+            )
+            # FastF1 resolves the event against this request's year, not a stored round.
+            session = fastf1.get_session(
+                request.year, request.grand_prix, request.session_type
+            )
+            if (
+                request.grand_prix in COMMON_GRAND_PRIX_NAMES
+                and _safe_get(session.event, "EventName", None) != request.grand_prix
+            ):
+                raise ValueError(
+                    f"{request.grand_prix} did not resolve exactly in the {request.year} schedule."
+                )
+            LOG.info(
+                "Session resolved %s: event=%s round=%s date=%s api_path=%s",
+                reference,
+                _safe_get(session.event, "EventName", "unknown"),
+                _safe_get(session.event, "RoundNumber", "unknown"),
+                getattr(session, "date", "unknown"),
+                getattr(session, "api_path", "unknown"),
+            )
             session.load(
                 laps=True,
                 telemetry=telemetry,
@@ -46,10 +72,10 @@ class FastF1SessionLoader:
             )
             self._validate_loaded_session(session, request, telemetry=telemetry)
         except Exception as exc:
+            LOG.exception("Session load failed [%s] %s", reference, request.label)
             raise FastF1DataLoadError(
                 f"FastF1 could not fully load {request.label}. "
-                "This is usually caused by an interrupted data download, blocked network, "
-                "or a stale Streamlit cache. Clear the dashboard cache and reload the session."
+                f"Server diagnostic reference: {reference}."
             ) from exc
         return session
 
@@ -78,6 +104,10 @@ class FastF1SessionLoader:
         try:
             schedule = fastf1.get_event_schedule(year, include_testing=False)
         except Exception:
+            LOG.exception(
+                "Could not load the %s schedule; using the unverified event-name list",
+                year,
+            )
             return COMMON_GRAND_PRIX_NAMES
 
         if "EventName" not in schedule:
@@ -99,10 +129,19 @@ class FastF1SessionLoader:
     def _configure_logging(fastf1: ModuleType) -> None:
         set_log_level = getattr(fastf1, "set_log_level", None)
         if set_log_level is not None:
-            set_log_level("ERROR")
+            # FastF1 soft-failure tracebacks are DEBUG records, not ERROR records.
+            set_log_level("DEBUG")
 
-        for logger_name in ("fastf1", "requests_cache", "urllib3"):
-            logging.getLogger(logger_name).setLevel(logging.ERROR)
+        logging.getLogger("fastf1").setLevel(logging.DEBUG)
+        LOG.setLevel(logging.INFO)
+        if not LOG.handlers:
+            handler = logging.StreamHandler()
+            handler.setFormatter(
+                logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s")
+            )
+            LOG.addHandler(handler)
+        for logger_name in ("requests_cache", "urllib3"):
+            logging.getLogger(logger_name).setLevel(logging.WARNING)
 
     @staticmethod
     def _validate_loaded_session(
@@ -116,8 +155,12 @@ class FastF1SessionLoader:
             raise FastF1DataLoadError(f"No laps were loaded for {request.label}.")
 
         if telemetry:
-            _ = session.car_data
-            _ = session.pos_data
+            for channel in ("car_data", "pos_data"):
+                values = getattr(session, channel)
+                if not values or not any(not frame.empty for frame in values.values()):
+                    raise FastF1DataLoadError(
+                        f"No {channel} samples were loaded for {request.label}."
+                    )
 
     @staticmethod
     def _load_fastf1() -> ModuleType:
