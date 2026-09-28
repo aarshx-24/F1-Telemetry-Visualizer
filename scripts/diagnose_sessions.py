@@ -23,11 +23,19 @@ def main() -> None:
     parser.add_argument("--year", type=int, default=2023)
     parser.add_argument("--event", default="Italian Grand Prix")
     parser.add_argument("--fresh-cache", action="store_true")
+    parser.add_argument(
+        "--raw-only",
+        action="store_true",
+        help="Verify raw car samples without SciPy interpolation",
+    )
     args = parser.parse_args()
     folder = ROOT / "logs" / "year-diagnostics"
     folder.mkdir(parents=True, exist_ok=True)
     stamp = str(time.time_ns())
     log_path = folder / f"{args.mode}_{args.year}_{stamp}.log"
+    import fastf1
+    import streamlit as st
+
     logging.basicConfig(
         level=logging.INFO,
         handlers=[
@@ -36,9 +44,6 @@ def main() -> None:
         ],
         force=True,
     )
-    import fastf1
-    import streamlit as st
-
     logging.info(
         "Python=%s executable=%s FastF1=%s Streamlit=%s",
         platform.python_version(),
@@ -68,7 +73,11 @@ def main() -> None:
             )
             session.load(laps=True, telemetry=True, weather=True, messages=False)
             lap = session.laps.pick_drivers("VER").pick_fastest()
-            telemetry = lap.get_telemetry()
+            telemetry = (
+                session.car_data[str(lap.DriverNumber)]
+                if args.raw_only
+                else lap.get_telemetry()
+            )
             rows.append(
                 {
                     "year": args.year,
@@ -77,6 +86,7 @@ def main() -> None:
                     "laps": len(session.laps),
                     "drivers": len(session.drivers),
                     "telemetry_rows": len(telemetry),
+                    "raw_only": args.raw_only,
                     "success": True,
                 }
             )
@@ -147,6 +157,14 @@ def main() -> None:
     output = log_path.with_suffix(".json")
     output.write_text(json.dumps(rows, indent=2), encoding="utf-8")
     print("RESULT_FILE", output, flush=True)
+    if any(
+        row.get("success") is False
+        or row.get("errors")
+        or row.get("exceptions")
+        or ("charts" in row and (not row["charts"] or row["driver_disabled"]))
+        for row in rows
+    ):
+        raise SystemExit(1)
 
 
 if __name__ == "__main__":

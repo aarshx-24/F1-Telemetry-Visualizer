@@ -2,6 +2,9 @@ from __future__ import annotations
 
 import importlib
 import logging
+import hashlib
+from pathlib import Path
+import time
 from types import ModuleType
 from typing import Any
 from uuid import uuid4
@@ -11,6 +14,7 @@ from telemetry.domain import SessionRequest, SessionSummary
 from telemetry.ingestion.calendar import COMMON_GRAND_PRIX_NAMES
 
 LOG = logging.getLogger(__name__)
+LOADER_SOURCE_SHA = hashlib.sha256(Path(__file__).read_bytes()).hexdigest()
 
 
 class FastF1NotInstalledError(RuntimeError):
@@ -36,7 +40,14 @@ class FastF1SessionLoader:
         self._configure_cache(fastf1)
 
         reference = uuid4().hex[:12]
+        started = time.monotonic()
         try:
+            LOG.info(
+                "Loader source at import=%s disk=%s cache=%s",
+                LOADER_SOURCE_SHA,
+                hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
+                self._settings.cache_dir,
+            )
             LOG.info(
                 "Session load %s: year=%s event=%s session=%s FastF1=%s",
                 reference,
@@ -71,6 +82,14 @@ class FastF1SessionLoader:
                 messages=False,
             )
             self._validate_loaded_session(session, request, telemetry=telemetry)
+            LOG.info(
+                "Session loaded [%s] %s laps=%s drivers=%s elapsed=%.2fs",
+                reference,
+                request.label,
+                len(session.laps),
+                len(session.drivers),
+                time.monotonic() - started,
+            )
         except Exception as exc:
             LOG.exception("Session load failed [%s] %s", reference, request.label)
             raise FastF1DataLoadError(
@@ -103,22 +122,23 @@ class FastF1SessionLoader:
 
         try:
             schedule = fastf1.get_event_schedule(year, include_testing=False)
-        except Exception:
-            LOG.exception(
-                "Could not load the %s schedule; using the unverified event-name list",
-                year,
-            )
-            return COMMON_GRAND_PRIX_NAMES
+        except Exception as exc:
+            LOG.exception("Could not load the %s schedule", year)
+            raise FastF1DataLoadError(
+                f"The verified {year} calendar could not be loaded."
+            ) from exc
 
         if "EventName" not in schedule:
-            return COMMON_GRAND_PRIX_NAMES
+            raise FastF1DataLoadError(f"The {year} calendar has no event names.")
 
         events = [
             str(event)
             for event in schedule["EventName"].dropna().tolist()
             if str(event).strip()
         ]
-        return events or COMMON_GRAND_PRIX_NAMES
+        if not events:
+            raise FastF1DataLoadError(f"The {year} calendar is empty.")
+        return events
 
     def _configure_cache(self, fastf1: ModuleType) -> None:
         self._settings.ensure_directories()
@@ -133,6 +153,10 @@ class FastF1SessionLoader:
             set_log_level("DEBUG")
 
         logging.getLogger("fastf1").setLevel(logging.DEBUG)
+        for handler in logging.getLogger("fastf1").handlers:
+            handler.setFormatter(
+                logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s")
+            )
         LOG.setLevel(logging.INFO)
         if not LOG.handlers:
             handler = logging.StreamHandler()

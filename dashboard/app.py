@@ -26,6 +26,8 @@ from telemetry.analytics import (
 from telemetry.comparison import DriverComparisonService
 from telemetry.domain import SessionRequest
 from telemetry.ingestion import FastF1DataLoadError, FastF1SessionLoader
+from telemetry.ingestion import fastf1_session_loader as loader_module
+from utils.runtime_diagnostics import log_runtime
 from telemetry.processing import TelemetryExtractor
 from telemetry.visualization import TelemetryPlotFactory
 
@@ -53,14 +55,14 @@ st.markdown(
 
 
 @st.cache_resource(show_spinner=False, max_entries=2)
-def load_session(request: SessionRequest) -> Any:
+def load_session(request: SessionRequest, build_id: str = "") -> Any:
     settings = build_settings(ROOT)
     loader = FastF1SessionLoader(settings=settings)
     return loader.load_session(request, telemetry=True)
 
 
 @st.cache_data(show_spinner=False)
-def load_grand_prix_options(year: int) -> list[str]:
+def load_grand_prix_options(year: int, build_id: str = "") -> list[str]:
     settings = build_settings(ROOT)
     loader = FastF1SessionLoader(settings=settings)
     return loader.list_grand_prix(year)
@@ -68,18 +70,33 @@ def load_grand_prix_options(year: int) -> list[str]:
 
 def main() -> None:
     st.title("F1 Telemetry Visualizer")
+    build_id = log_runtime(
+        ROOT, getattr(loader_module, "LOADER_SOURCE_SHA", "legacy module")
+    )
 
     st.sidebar.header("Session")
     selected_year = int(
         st.sidebar.number_input("Year", min_value=2018, max_value=2026, value=2024)
     )
-    grand_prix_options = load_grand_prix_options(selected_year)
+    try:
+        grand_prix_options = load_grand_prix_options(selected_year, build_id)
+    except Exception:
+        LOG.exception("Calendar unavailable for %s", selected_year)
+        st.sidebar.selectbox("Grand Prix", [], disabled=True)
+        st.sidebar.multiselect("Drivers", [], disabled=True)
+        st.info(
+            f"The {selected_year} calendar could not be verified. Driver selection requires a valid session. Try another year or retry."
+        )
+        if st.sidebar.button("Retry calendar"):
+            load_grand_prix_options.clear()
+            st.rerun()
+        return
     request, frequency_hz = render_request_controls(grand_prix_options, selected_year)
     if st.sidebar.button("Clear session cache"):
         load_session.clear()
         st.rerun()
 
-    session = _safe_load_session(request)
+    session = _safe_load_session(request, build_id)
     if session is None:
         render_driver_controls(request, frequency_hz, [], unavailable=True)
         return
@@ -138,10 +155,10 @@ def main() -> None:
         _render_data_tab(lap_table, comparison.sector_table)
 
 
-def _safe_load_session(request: SessionRequest) -> Any | None:
+def _safe_load_session(request: SessionRequest, build_id: str = "") -> Any | None:
     with st.spinner(f"Loading {request.label}"):
         try:
-            return load_session(request)
+            return load_session(request, build_id)
         except FastF1DataLoadError as exc:
             LOG.exception("Dashboard session failure for %s", request.label)
             st.error(str(exc))

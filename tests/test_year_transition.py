@@ -129,3 +129,78 @@ def test_fastf1_soft_failure_tracebacks_are_not_suppressed():
     FastF1SessionLoader._configure_logging(api)
     api.set_log_level.assert_called_once_with("DEBUG")
     assert logging.getLogger("fastf1").isEnabledFor(logging.DEBUG)
+
+
+@pytest.mark.parametrize("schedule", [pd.DataFrame(), pd.DataFrame({"EventName": []})])
+def test_missing_calendar_never_offers_unverified_events(
+    tmp_path, monkeypatch, schedule
+):
+    loader = FastF1SessionLoader(build_settings(tmp_path))
+    api = Mock()
+    api.get_event_schedule.return_value = schedule
+    monkeypatch.setattr(loader, "_load_fastf1", lambda: api)
+    monkeypatch.setattr(loader, "_configure_cache", lambda _: None)
+    with pytest.raises(FastF1DataLoadError):
+        loader.list_grand_prix(2023)
+    api.get_event_schedule.assert_called_once_with(2023, include_testing=False)
+
+
+def test_calendar_network_failure_preserves_cause(tmp_path, monkeypatch):
+    loader = FastF1SessionLoader(build_settings(tmp_path))
+    api = Mock()
+    cause = ConnectionError("schedule unavailable")
+    api.get_event_schedule.side_effect = cause
+    monkeypatch.setattr(loader, "_load_fastf1", lambda: api)
+    monkeypatch.setattr(loader, "_configure_cache", lambda _: None)
+    with pytest.raises(FastF1DataLoadError) as error:
+        loader.list_grand_prix(2023)
+    assert error.value.__cause__ is cause
+
+
+def test_calendar_failure_disables_controls_without_loading_a_session(monkeypatch):
+    monkeypatch.setattr(
+        FastF1SessionLoader,
+        "list_grand_prix",
+        Mock(side_effect=FastF1DataLoadError("unavailable")),
+    )
+    load = Mock()
+    monkeypatch.setattr(FastF1SessionLoader, "load_session", load)
+    app = AppTest.from_file("dashboard/app.py").run()
+    assert not app.exception
+    assert app.selectbox[0].disabled
+    assert app.multiselect[0].disabled
+    assert app.multiselect[0].options == []
+    load.assert_not_called()
+
+
+def test_load_arguments_and_validation_order(tmp_path, monkeypatch):
+    loader = FastF1SessionLoader(build_settings(tmp_path))
+    events = []
+
+    class Session:
+        event = {"EventName": "Italian Grand Prix"}
+        drivers = ["VER"]
+        car_data = {"VER": pd.DataFrame({"Speed": [100]})}
+        pos_data = {"VER": pd.DataFrame({"X": [0]})}
+
+        def load(self, **kwargs):
+            assert kwargs == {
+                "laps": True,
+                "telemetry": True,
+                "weather": True,
+                "messages": False,
+            }
+            events.append("load")
+
+        @property
+        def laps(self):
+            assert events[0] == "load"
+            events.append("validate")
+            return pd.DataFrame({"Driver": ["VER"]})
+
+    api = Mock()
+    api.get_session.return_value = Session()
+    monkeypatch.setattr(loader, "_load_fastf1", lambda: api)
+    monkeypatch.setattr(loader, "_configure_cache", lambda _: None)
+    loader.load_session(SessionRequest(2023, "Italian Grand Prix", "Q"))
+    assert events[:2] == ["load", "validate"]
