@@ -1,10 +1,10 @@
 from __future__ import annotations
 
+import hashlib
 import importlib
 import logging
-import hashlib
-from pathlib import Path
 import time
+from pathlib import Path
 from types import ModuleType
 from typing import Any
 from uuid import uuid4
@@ -24,6 +24,10 @@ class FastF1NotInstalledError(RuntimeError):
 class FastF1DataLoadError(RuntimeError):
     """Raised when FastF1 returns a session without required data loaded."""
 
+    def __init__(self, message: str, *, partial_session: Any = None) -> None:
+        super().__init__(message)
+        self.partial_session = partial_session
+
 
 class FastF1SessionLoader:
     """FastF1-backed implementation of the session ingestion boundary."""
@@ -41,6 +45,7 @@ class FastF1SessionLoader:
 
         reference = uuid4().hex[:12]
         started = time.monotonic()
+        session = None
         try:
             LOG.info(
                 "Loader source at import=%s disk=%s cache=%s",
@@ -94,7 +99,8 @@ class FastF1SessionLoader:
             LOG.exception("Session load failed [%s] %s", reference, request.label)
             raise FastF1DataLoadError(
                 f"FastF1 could not fully load {request.label}. "
-                f"Server diagnostic reference: {reference}."
+                f"Server diagnostic reference: {reference}.",
+                partial_session=session,
             ) from exc
         return session
 

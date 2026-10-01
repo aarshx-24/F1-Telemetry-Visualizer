@@ -34,9 +34,13 @@ class DistanceTelemetryAligner:
 
         for channel in channels:
             if channel in ref.columns:
-                aligned[f"{reference.driver}_{channel}"] = self._interpolate(ref, channel, grid)
+                aligned[f"{reference.driver}_{channel}"] = self._interpolate(
+                    ref, channel, grid
+                )
             if channel in cmp.columns:
-                aligned[f"{comparison.driver}_{channel}"] = self._interpolate(cmp, channel, grid)
+                aligned[f"{comparison.driver}_{channel}"] = self._interpolate(
+                    cmp, channel, grid
+                )
 
         ref_time = f"{reference.driver}_TimeSeconds"
         cmp_time = f"{comparison.driver}_TimeSeconds"

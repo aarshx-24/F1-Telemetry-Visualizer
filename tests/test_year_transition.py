@@ -1,6 +1,7 @@
+import logging
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock
-import logging
 
 import pandas as pd
 import pytest
@@ -13,6 +14,10 @@ from telemetry.ingestion.fastf1_session_loader import (
     FastF1DataLoadError,
     FastF1SessionLoader,
 )
+from telemetry.ingestion.resilient_session_loader import (
+    PRESENTATION_GRAND_PRIX_NAMES,
+    ResilientSessionLoader,
+)
 
 
 @pytest.fixture(autouse=True)
@@ -24,7 +29,7 @@ def isolated_app_cache():
     st.cache_data.clear()
 
 
-def test_failure_preserves_disabled_driver_control_and_failed_results_are_not_cached(
+def test_live_failure_uses_real_demo_data_and_keeps_driver_control_available(
     monkeypatch,
 ):
     monkeypatch.setattr(
@@ -34,14 +39,15 @@ def test_failure_preserves_disabled_driver_control_and_failed_results_are_not_ca
     )
     load = Mock(side_effect=FastF1DataLoadError("Diagnostic reference: test"))
     monkeypatch.setattr(FastF1SessionLoader, "load_session", load)
-    app = AppTest.from_file("dashboard/app.py").run()
+    app = AppTest.from_file("dashboard/app.py").run(timeout=20)
     assert not app.exception
     assert app.multiselect[0].label == "Drivers"
-    assert app.multiselect[0].disabled
-    assert app.multiselect[0].options == []
-    assert app.error
-    app.run()
-    assert load.call_count == 2
+    assert not app.multiselect[0].disabled
+    assert {"VER", "LEC"}.issubset(app.multiselect[0].options)
+    assert any("Demonstration Mode" in warning.value for warning in app.warning)
+    assert app.get("plotly_chart")
+    app.run(timeout=20)
+    assert load.call_count == 1
 
 
 def test_year_change_resets_event_and_drivers_and_uses_distinct_cache_entries(
@@ -157,20 +163,54 @@ def test_calendar_network_failure_preserves_cause(tmp_path, monkeypatch):
     assert error.value.__cause__ is cause
 
 
-def test_calendar_failure_disables_controls_without_loading_a_session(monkeypatch):
+def test_calendar_failure_uses_presentation_options_and_demo_data(monkeypatch):
     monkeypatch.setattr(
         FastF1SessionLoader,
         "list_grand_prix",
         Mock(side_effect=FastF1DataLoadError("unavailable")),
     )
-    load = Mock()
-    monkeypatch.setattr(FastF1SessionLoader, "load_session", load)
-    app = AppTest.from_file("dashboard/app.py").run()
+    monkeypatch.setattr(
+        FastF1SessionLoader,
+        "load_session",
+        Mock(side_effect=FastF1DataLoadError("session unavailable")),
+    )
+    app = AppTest.from_file("dashboard/app.py").run(timeout=20)
     assert not app.exception
-    assert app.selectbox[0].disabled
-    assert app.multiselect[0].disabled
-    assert app.multiselect[0].options == []
-    load.assert_not_called()
+    assert not app.selectbox[0].disabled
+    assert "Italian Grand Prix" in app.selectbox[0].options
+    assert set(PRESENTATION_GRAND_PRIX_NAMES) == set(app.selectbox[0].options)
+    assert not app.multiselect[0].disabled
+    assert app.multiselect[0].options
+
+
+@pytest.mark.parametrize("session_type", ["Q", "R", "FP1", "FP2", "FP3", "SQ", "S"])
+def test_demo_fixture_supports_every_session_selector_state(monkeypatch, session_type):
+    loader = ResilientSessionLoader(build_settings(Path.cwd()))
+    monkeypatch.setattr(
+        FastF1SessionLoader,
+        "load_session",
+        Mock(side_effect=FastF1DataLoadError("network unavailable")),
+    )
+    requested = SessionRequest(2025, "Italian Grand Prix", session_type)
+    loaded = loader.load_session(requested)
+    assert loaded.source == "fallback"
+    assert loaded.requested == requested
+    assert loaded.source_request == SessionRequest(2024, "Bahrain Grand Prix", "Q")
+    assert {"VER", "LEC"}.issubset(loaded.session.drivers)
+    assert not loaded.session.laps.empty
+
+
+def test_presentation_calendar_never_uses_deprecated_hardcoded_events(monkeypatch):
+    loader = ResilientSessionLoader(build_settings(Path.cwd()))
+    monkeypatch.setattr(
+        FastF1SessionLoader,
+        "list_grand_prix",
+        Mock(side_effect=FastF1DataLoadError("calendar unavailable")),
+    )
+    options, is_live = loader.list_grand_prix(2024)
+    assert not is_live
+    assert options == PRESENTATION_GRAND_PRIX_NAMES
+    assert "70th Anniversary Grand Prix" not in options
 
 
 def test_load_arguments_and_validation_order(tmp_path, monkeypatch):
@@ -178,10 +218,11 @@ def test_load_arguments_and_validation_order(tmp_path, monkeypatch):
     events = []
 
     class Session:
-        event = {"EventName": "Italian Grand Prix"}
-        drivers = ["VER"]
-        car_data = {"VER": pd.DataFrame({"Speed": [100]})}
-        pos_data = {"VER": pd.DataFrame({"X": [0]})}
+        def __init__(self) -> None:
+            self.event = {"EventName": "Italian Grand Prix"}
+            self.drivers = ["VER"]
+            self.car_data = {"VER": pd.DataFrame({"Speed": [100]})}
+            self.pos_data = {"VER": pd.DataFrame({"X": [0]})}
 
         def load(self, **kwargs):
             assert kwargs == {

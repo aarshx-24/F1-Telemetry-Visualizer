@@ -6,7 +6,6 @@ import plotly.graph_objects as go
 
 from telemetry.domain import LapTelemetry
 
-
 DEFAULT_TEMPLATE = "plotly_dark"
 
 
@@ -114,7 +113,11 @@ class TelemetryPlotFactory:
 
         melted = sector_table.melt(
             id_vars=["Driver"],
-            value_vars=[column for column in ("Sector1", "Sector2", "Sector3") if column in sector_table],
+            value_vars=[
+                column
+                for column in ("Sector1", "Sector2", "Sector3")
+                if column in sector_table
+            ],
             var_name="Sector",
             value_name="Seconds",
         )
@@ -172,7 +175,11 @@ class TelemetryPlotFactory:
             y="LapTimeSeconds",
             color="Cluster",
             symbol="Driver",
-            hover_data=[column for column in ("Compound", "TyreLife") if column in clustered_laps],
+            hover_data=[
+                column
+                for column in ("Compound", "TyreLife")
+                if column in clustered_laps
+            ],
             template=DEFAULT_TEMPLATE,
             title="Lap clustering",
         )

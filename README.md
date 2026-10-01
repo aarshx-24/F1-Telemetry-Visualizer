@@ -20,6 +20,25 @@ This is now a runnable end-to-end project with:
 - HTML report export
 - CSV data export
 
+## Reliable Presentation Mode
+
+The dashboard is live-data first. For every selected year, Grand Prix, and
+session, it attempts a normal FastF1 load. If that request is unavailable,
+the dashboard remains fully usable by loading a bundled real telemetry fixture
+instead of showing an empty driver selector or a traceback.
+
+- **LIVE FastF1 Data** means the requested session loaded from FastF1.
+- **DEMO / FALLBACK** means the selected controls remain visible, but charts
+  use the bundled real **2024 Bahrain Grand Prix qualifying** fixture.
+- The dashboard explicitly displays both the selected session and the actual
+  telemetry source. It never represents fallback telemetry as the requested
+  session's data.
+
+The fixture is stored in `data/demo/2024_bahrain_grand_prix_q/` and includes
+real exported lap timing, track-corner, and fastest-lap telemetry data. It is
+tracked with the project so a demonstration can continue without FastF1 or an
+internet connection.
+
 ## Open the Dashboard
 
 From this project folder:
@@ -101,6 +120,10 @@ project_root/
 The codebase separates responsibilities:
 
 - `telemetry.ingestion` owns FastF1 loading and cache setup.
+- `telemetry.ingestion.ResilientSessionLoader` owns the live-first and
+  demonstration-fallback decision, returning one normalized `LoadedSession`.
+- `telemetry.ingestion.demo_session` adapts the bundled real fixture to the
+  same interface used by the processing and visualization layers.
 - `telemetry.processing` cleans telemetry, extracts laps, and aligns signals by distance.
 - `telemetry.comparison` coordinates driver-vs-driver analysis.
 - `telemetry.analytics` computes braking, consistency, degradation, corner, clustering, and anomaly insights.
@@ -129,10 +152,10 @@ Run:
 .\.venv\Scripts\python.exe -m pytest
 ```
 
-Expected result:
+On Windows, if an old protected pytest temporary folder exists, use:
 
-```text
-6 passed
+```powershell
+.\.venv\Scripts\python.exe -m pytest --basetemp=outputs\pytest-temp
 ```
 
 ## Generated Artifacts

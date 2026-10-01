@@ -6,7 +6,9 @@ import pandas as pd
 class LapClusterAnalyzer:
     """Cluster laps using lightweight timing features."""
 
-    def cluster_laps(self, lap_table: pd.DataFrame, *, clusters: int = 3) -> pd.DataFrame:
+    def cluster_laps(
+        self, lap_table: pd.DataFrame, *, clusters: int = 3
+    ) -> pd.DataFrame:
         if lap_table.empty:
             return pd.DataFrame()
 

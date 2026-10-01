@@ -42,7 +42,9 @@ class TelemetryExtractor:
 
         for column in LAP_TIME_COLUMNS:
             if column in laps.columns:
-                laps[f"{column}Seconds"] = pd.to_timedelta(laps[column]).dt.total_seconds()
+                laps[f"{column}Seconds"] = pd.to_timedelta(
+                    laps[column]
+                ).dt.total_seconds()
 
         useful_columns = [
             column
@@ -74,7 +76,7 @@ class TelemetryExtractor:
     ) -> LapTelemetry:
         laps = self._driver_laps(session, driver)
         fast_lap = self._pick_fastest(laps)
-        return self._build_lap_telemetry(fast_lap, frequency=frequency)
+        return self._build_lap_telemetry(session, fast_lap, frequency=frequency)
 
     def extract_lap(
         self,
@@ -88,7 +90,7 @@ class TelemetryExtractor:
         selected = laps[laps["LapNumber"].astype(int) == int(lap_number)]
         if selected.empty:
             raise TelemetryExtractionError(f"No lap {lap_number} found for {driver}.")
-        return self._build_lap_telemetry(selected.iloc[0], frequency=frequency)
+        return self._build_lap_telemetry(session, selected.iloc[0], frequency=frequency)
 
     def extract_fastest_laps(
         self,
@@ -131,7 +133,9 @@ class TelemetryExtractor:
             raise TelemetryExtractionError("Session contains no lap data.")
 
         pick_drivers = getattr(laps, "pick_drivers", None)
-        driver_laps = pick_drivers(driver) if pick_drivers else laps[laps["Driver"] == driver]
+        driver_laps = (
+            pick_drivers(driver) if pick_drivers else laps[laps["Driver"] == driver]
+        )
         driver_laps = driver_laps[driver_laps["LapTime"].notna()]
 
         if driver_laps.empty:
@@ -154,15 +158,19 @@ class TelemetryExtractor:
 
     def _build_lap_telemetry(
         self,
+        session: Any,
         lap: Any,
         *,
         frequency: int | str | None,
     ) -> LapTelemetry:
-        get_telemetry = getattr(lap, "get_telemetry", None)
-        if get_telemetry is None:
-            raise TelemetryExtractionError("Selected lap cannot provide telemetry.")
-
-        raw_telemetry = get_telemetry(frequency=frequency)
+        session_telemetry = getattr(session, "get_lap_telemetry", None)
+        if session_telemetry is not None:
+            raw_telemetry = session_telemetry(lap, frequency=frequency)
+        else:
+            get_telemetry = getattr(lap, "get_telemetry", None)
+            if get_telemetry is None:
+                raise TelemetryExtractionError("Selected lap cannot provide telemetry.")
+            raw_telemetry = get_telemetry(frequency=frequency)
         telemetry = self._cleaner.prepare_lap_telemetry(raw_telemetry)
 
         return LapTelemetry(

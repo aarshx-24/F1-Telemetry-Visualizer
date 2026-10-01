@@ -35,7 +35,9 @@ class DriverInsightEngine:
                 )
             if "Throttle" in telemetry:
                 full_throttle = float((telemetry["Throttle"] > 95).mean() * 100)
-                insights.append(f"{lap.driver} full-throttle distance share: {full_throttle:.1f}%.")
+                insights.append(
+                    f"{lap.driver} full-throttle distance share: {full_throttle:.1f}%."
+                )
 
         if "DeltaSeconds" in aligned:
             delta = aligned["DeltaSeconds"].dropna()
@@ -122,7 +124,9 @@ class ConsistencyAnalyzer:
 class TireDegradationAnalyzer:
     """Estimate stint-level tyre degradation from lap-time trend."""
 
-    def summarize(self, lap_table: pd.DataFrame, driver: str | None = None) -> pd.DataFrame:
+    def summarize(
+        self, lap_table: pd.DataFrame, driver: str | None = None
+    ) -> pd.DataFrame:
         if lap_table.empty or "LapTimeSeconds" not in lap_table:
             return pd.DataFrame()
 

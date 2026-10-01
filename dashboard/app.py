@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-import sys
 import logging
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -15,6 +15,7 @@ if str(ROOT) not in sys.path:
 from config.settings import build_settings
 from dashboard.components.sidebar import render_driver_controls, render_request_controls
 from dashboard.components.summary import render_lap_metrics
+from dashboard.diagnostics import start_owner_diagnostics
 from telemetry.analytics import (
     BrakingAnalyzer,
     ConsistencyAnalyzer,
@@ -24,12 +25,12 @@ from telemetry.analytics import (
     TireDegradationAnalyzer,
 )
 from telemetry.comparison import DriverComparisonService
-from telemetry.domain import SessionRequest
-from telemetry.ingestion import FastF1DataLoadError, FastF1SessionLoader
+from telemetry.domain import LoadedSession, SessionRequest
+from telemetry.ingestion import ResilientSessionLoader
 from telemetry.ingestion import fastf1_session_loader as loader_module
-from utils.runtime_diagnostics import log_runtime
 from telemetry.processing import TelemetryExtractor
 from telemetry.visualization import TelemetryPlotFactory
+from utils.runtime_diagnostics import log_runtime
 
 LOG = logging.getLogger(__name__)
 
@@ -57,19 +58,23 @@ st.markdown(
 @st.cache_resource(show_spinner=False, max_entries=2)
 def load_session(request: SessionRequest, build_id: str = "") -> Any:
     settings = build_settings(ROOT)
-    loader = FastF1SessionLoader(settings=settings)
-    return loader.load_session(request, telemetry=True)
+    return ResilientSessionLoader(settings=settings).load_session(request)
 
 
 @st.cache_data(show_spinner=False)
-def load_grand_prix_options(year: int, build_id: str = "") -> list[str]:
+def load_grand_prix_options(year: int, build_id: str = "") -> tuple[list[str], bool]:
     settings = build_settings(ROOT)
-    loader = FastF1SessionLoader(settings=settings)
+    loader = ResilientSessionLoader(settings=settings)
     return loader.list_grand_prix(year)
 
 
 def main() -> None:
     st.title("F1 Telemetry Visualizer")
+    try:
+        diagnostic_config = dict(st.secrets.get("http_diagnostics", {}))
+    except FileNotFoundError:
+        diagnostic_config = {}
+    start_owner_diagnostics(ROOT, diagnostic_config)
     build_id = log_runtime(
         ROOT, getattr(loader_module, "LOADER_SOURCE_SHA", "legacy module")
     )
@@ -78,33 +83,34 @@ def main() -> None:
     selected_year = int(
         st.sidebar.number_input("Year", min_value=2018, max_value=2026, value=2024)
     )
-    try:
-        grand_prix_options = load_grand_prix_options(selected_year, build_id)
-    except Exception:
-        LOG.exception("Calendar unavailable for %s", selected_year)
-        st.sidebar.selectbox("Grand Prix", [], disabled=True)
-        st.sidebar.multiselect("Drivers", [], disabled=True)
-        st.info(
-            f"The {selected_year} calendar could not be verified. Driver selection requires a valid session. Try another year or retry."
+    grand_prix_options, calendar_is_live = load_grand_prix_options(
+        selected_year, build_id
+    )
+    if not calendar_is_live:
+        st.sidebar.caption(
+            "Live calendar unavailable. Demonstration selector options are in use."
         )
-        if st.sidebar.button("Retry calendar"):
-            load_grand_prix_options.clear()
-            st.rerun()
-        return
     request, frequency_hz = render_request_controls(grand_prix_options, selected_year)
     if st.sidebar.button("Clear session cache"):
         load_session.clear()
+        load_grand_prix_options.clear()
         st.rerun()
 
-    session = _safe_load_session(request, build_id)
-    if session is None:
+    loaded = _safe_load_session(request, build_id)
+    if loaded is None:
         render_driver_controls(request, frequency_hz, [], unavailable=True)
+        st.warning(
+            "The local demonstration fixture is unavailable. Technical details are in the server logs."
+        )
         return
+
+    _render_source_status(loaded)
+    session = loaded.session
 
     extractor = TelemetryExtractor()
     try:
         drivers = extractor.available_drivers(session)
-    except Exception as exc:
+    except Exception:
         LOG.exception("Driver extraction failed for %s", request.label)
         render_driver_controls(request, frequency_hz, [], unavailable=True)
         st.error(
@@ -129,8 +135,12 @@ def main() -> None:
             selected_drivers,
             frequency=controls.frequency_hz,
         )
-    except Exception as exc:
-        st.error(f"Could not build driver comparison: {exc}")
+    except Exception:
+        LOG.exception("Driver comparison failed for %s", controls.request.label)
+        st.warning(
+            "The selected comparison could not be prepared. Choose different drivers "
+            "or reload the session; technical details are available in the server logs."
+        )
         return
 
     laps = list(comparison.laps)
@@ -155,21 +165,30 @@ def main() -> None:
         _render_data_tab(lap_table, comparison.sector_table)
 
 
-def _safe_load_session(request: SessionRequest, build_id: str = "") -> Any | None:
+def _safe_load_session(
+    request: SessionRequest, build_id: str = ""
+) -> LoadedSession | None:
     with st.spinner(f"Loading {request.label}"):
         try:
             return load_session(request, build_id)
-        except FastF1DataLoadError as exc:
-            LOG.exception("Dashboard session failure for %s", request.label)
-            st.error(str(exc))
-            st.info(
-                "The server logs contain the underlying FastF1 traceback. No data from the previously selected year is being shown."
-            )
+        except Exception:
+            LOG.exception("Live and demonstration loading failed for %s", request.label)
             return None
-        except Exception as exc:
-            LOG.exception("Unexpected session failure for %s", request.label)
-            st.error(f"Session load failed: {exc}")
-            return None
+
+
+def _render_source_status(loaded: LoadedSession) -> None:
+    if loaded.is_live:
+        st.success("Live FastF1 Data", icon="🟢")
+        st.caption(f"Data source: LIVE FastF1 • {loaded.source_request.label}")
+        return
+    st.warning(
+        "Demonstration Mode — Live FastF1 data unavailable. Using bundled real telemetry to demonstrate the application's full workflow.",
+        icon="🟡",
+    )
+    st.caption(
+        f"Selected session: {loaded.requested.label} • Data source: DEMO / FALLBACK • "
+        f"Displayed real telemetry source: {loaded.source_request.label}"
+    )
 
 
 def _render_compare_tab(

@@ -1,5 +1,5 @@
-from pathlib import Path
 import tomllib
+from pathlib import Path
 
 
 def test_cloud_requirements_match_project_and_dashboard_analytics_extras():

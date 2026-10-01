@@ -53,7 +53,9 @@ class TelemetryCleaner:
             frame["Brake"] = frame["Brake"].fillna(False).astype(bool).astype(int)
 
         if "DRS" in frame.columns:
-            frame["DRSActive"] = np.where(frame["DRS"].fillna(0).astype(float) >= 10, 1, 0)
+            frame["DRSActive"] = np.where(
+                frame["DRS"].fillna(0).astype(float) >= 10, 1, 0
+            )
 
         return frame
 

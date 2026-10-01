@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, Literal
 
 if TYPE_CHECKING:
     import pandas as pd
@@ -48,6 +48,21 @@ class SessionSummary:
                 f"FastF1 cache: {self.cache_path}",
             )
         )
+
+
+@dataclass(frozen=True, slots=True)
+class LoadedSession:
+    """A normalized session returned from live FastF1 or a local real-data fixture."""
+
+    session: Any
+    requested: SessionRequest
+    source: Literal["live", "fallback"]
+    source_request: SessionRequest
+    error: str | None = None
+
+    @property
+    def is_live(self) -> bool:
+        return self.source == "live"
 
 
 @dataclass(frozen=True, slots=True)
